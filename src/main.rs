@@ -1,12 +1,11 @@
 // TODO:
 // - tests
 // - for punctuators, use a match
-// - For L'xx' or u8"zzzz", maybe use code for identifiers and look at next character
 // - move punctuators code to a different method
 // - make file path in Position non-optional
-// - add Objective-C keywords
-// - make check if identifier is a keyword at the RawToken level
-// - handle \r \n \t...
+// - add Objective-C keywords (look at clang's TokenKinds.def)
+// - handle \r \n \t... (look at clang's LiteralSupport.cpp)
+// - maybe use Rc for strings in tokens
 // - only one pass
 
 use lazy_static::lazy_static;
@@ -133,65 +132,6 @@ impl<'a> CharsScanner<'a> {
         } else {
             None
         }
-    }
-
-    fn check_two<F1, F2>(&mut self, mut matcher1: F1, mut matcher2: F2) -> Option<(char, char)>
-    where
-        F1: FnMut(&char) -> bool,
-        F2: FnMut(&char) -> bool,
-    {
-        let mut tmp = self.chars.clone();
-        let c1 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher1(&c1) {
-            return None;
-        }
-        let c2 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher2(&c2) {
-            return None;
-        }
-        Some((c1, c2))
-    }
-
-    fn check_three<F1, F2, F3>(
-        &mut self,
-        mut matcher1: F1,
-        mut matcher2: F2,
-        mut matcher3: F3,
-    ) -> Option<(char, char, char)>
-    where
-        F1: FnMut(&char) -> bool,
-        F2: FnMut(&char) -> bool,
-        F3: FnMut(&char) -> bool,
-    {
-        let mut tmp = self.chars.clone();
-        let c1 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher1(&c1) {
-            return None;
-        }
-        let c2 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher2(&c2) {
-            return None;
-        }
-        let c3 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher3(&c3) {
-            return None;
-        }
-        Some((c1, c2, c3))
     }
 
     fn scan_append<F>(&mut self, mut matcher: F, string: &mut String)
@@ -341,7 +281,6 @@ impl<'a> RawTokenIter<'a> {
         RawTokenIter { scanner }
     }
 
-    // TODO: Handle errors
     fn read_number_literal(&mut self) -> Result<RawToken, LexError> {
         let mut token = String::new();
 
@@ -468,16 +407,16 @@ impl<'a> RawTokenIter<'a> {
         }
     }
 
-    fn read_char_literal(&mut self) -> Result<RawToken, LexError> {
-        let prefix = if self.scanner.scan_one(any_of!('L')).is_some() {
-            Some(CharPrefix::WChar)
-        } else if self.scanner.scan_one(any_of!('u')).is_some() {
-            Some(CharPrefix::Char16)
-        } else if self.scanner.scan_one(any_of!('U')).is_some() {
-            Some(CharPrefix::Char32)
-        } else {
-            None
-        };
+    fn char_literal_prefix(prefix: &str) -> Option<CharPrefix> {
+        match prefix {
+            "L" => Some(CharPrefix::WChar),
+            "u" => Some(CharPrefix::Char16),
+            "U" => Some(CharPrefix::Char32),
+            _ => None,
+        }
+    }
+
+    fn read_char_literal(&mut self, prefix: Option<CharPrefix>) -> Result<RawToken, LexError> {
         self.scanner.scan_one(any_of!('\'')).unwrap();
         let t = if self.scanner.scan_one(any_of!('\\')).is_some() {
             let c = self.read_char_escape()?;
@@ -491,21 +430,17 @@ impl<'a> RawTokenIter<'a> {
         Ok(t)
     }
 
-    fn read_string_literal(&mut self) -> Result<RawToken, LexError> {
-        let prefix = if self.scanner.scan_one(any_of!('L')).is_some() {
-            Some(StringPrefix::WChar)
-        } else if self.scanner.scan_one(any_of!('u')).is_some() {
-            if self.scanner.scan_one(any_of!('8')).is_some() {
-                Some(StringPrefix::Utf8)
-            } else {
-                Some(StringPrefix::Char16)
-            }
-        } else if self.scanner.scan_one(any_of!('U')).is_some() {
-            Some(StringPrefix::Char32)
-        } else {
-            None
-        };
+    fn string_literal_prefix(prefix: &str) -> Option<StringPrefix> {
+        match prefix {
+            "L" => Some(StringPrefix::WChar),
+            "u8" => Some(StringPrefix::Utf8),
+            "u" => Some(StringPrefix::Char16),
+            "U" => Some(StringPrefix::Char32),
+            _ => None,
+        }
+    }
 
+    fn read_string_literal(&mut self, prefix: Option<StringPrefix>) -> Result<RawToken, LexError> {
         self.scanner.scan_one(any_of!('"')).unwrap();
         let mut string = String::new();
 
@@ -542,23 +477,10 @@ impl<'a> Iterator for RawTokenIter<'a> {
         } else if self.scanner.scan_one(any_of!('\r')).is_some() {
             self.scanner.scan_one(any_of!('\n'));
             Some(Ok(RawToken::NewLine))
-        } else if self.scanner.check_one(any_of!('\'')).is_some()
-            || self
-                .scanner
-                .check_two(any_of!('L', 'u', 'U'), any_of!('"'))
-                .is_some()
-            || self
-                .scanner
-                .check_three(any_of!('u'), any_of!('8'), any_of!('"'))
-                .is_some()
-        {
-            Some(self.read_char_literal())
-        } else if self.scanner.check_one(any_of!('"')).is_some() || self
-            .scanner
-            .check_two(any_of!('L', 'u', 'U'), any_of!('\''))
-            .is_some()
-        {
-            Some(self.read_string_literal())
+        } else if self.scanner.check_one(any_of!('\'')).is_some() {
+            Some(self.read_char_literal(None))
+        } else if self.scanner.check_one(any_of!('"')).is_some() {
+            Some(self.read_string_literal(None))
         } else if let Some(c) = self.scanner.scan_one(any_of!('a'..='z', 'A'..='Z', '_')) {
             let mut identifier = String::new();
             identifier.push(c);
@@ -570,7 +492,26 @@ impl<'a> Iterator for RawTokenIter<'a> {
             if let Some(&keyword) = KEYWORDS.get(identifier.as_str()) {
                 Some(Ok(RawToken::Keyword(keyword)))
             } else {
-                Some(Ok(RawToken::Identifier(identifier)))
+                match self.scanner.peek() {
+                    Some('\'') => {
+                        if let Some(prefix) = RawTokenIter::char_literal_prefix(identifier.as_str())
+                        {
+                            Some(self.read_char_literal(Some(prefix)))
+                        } else {
+                            Some(Ok(RawToken::Identifier(identifier)))
+                        }
+                    }
+                    Some('\"') => {
+                        if let Some(prefix) =
+                            RawTokenIter::string_literal_prefix(identifier.as_str())
+                        {
+                            Some(self.read_string_literal(Some(prefix)))
+                        } else {
+                            Some(Ok(RawToken::Identifier(identifier)))
+                        }
+                    }
+                    _ => Some(Ok(RawToken::Identifier(identifier))),
+                }
             }
         } else if self.scanner.scan_one(any_of!('[')).is_some() {
             Some(Ok(RawToken::Punctuator(Punctuator::LeftSquareBracket)))
