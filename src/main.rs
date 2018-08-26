@@ -2,7 +2,6 @@
 // - tests
 // - for punctuators, use a match
 // - move punctuators code to a different method
-// - add Objective-C keywords (look at clang's TokenKinds.def)
 // - handle \r \n \t... (look at clang's LiteralSupport.cpp)
 // - maybe use Rc for strings in tokens
 
@@ -305,6 +304,38 @@ enum Keyword {
     ThreadLocal,
 }
 
+// Objective-C keywords, always after a @.
+// The list comes from clang's include/clang/Basic/TokenKinds.def.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjCKeyword {
+    Class,
+    CompatibilityAlias,
+    Defs,
+    Encode,
+    End,
+    Implementation,
+    Interface,
+    Private,
+    Protected,
+    Protocol,
+    Public,
+    Selector,
+    Throw,
+    Try,
+    Catch,
+    Finally,
+    Synchronized,
+    Autoreleasepool,
+    Property,
+    Package,
+    Required,
+    Optional,
+    Synthesize,
+    Dynamic,
+    Import,
+    Available,
+}
+
 lazy_static! {
     static ref KEYWORDS: HashMap<&'static str, Keyword> = {
         let mut keywords = HashMap::new();
@@ -356,6 +387,38 @@ lazy_static! {
 
         keywords
     };
+    static ref OBJC_KEYWORDS: HashMap<&'static str, ObjCKeyword> = {
+        let mut keywords = HashMap::new();
+
+        keywords.insert("class", ObjCKeyword::Class);
+        keywords.insert("compatibility_alias", ObjCKeyword::CompatibilityAlias);
+        keywords.insert("defs", ObjCKeyword::Defs);
+        keywords.insert("encode", ObjCKeyword::Encode);
+        keywords.insert("end", ObjCKeyword::End);
+        keywords.insert("implementation", ObjCKeyword::Implementation);
+        keywords.insert("interface", ObjCKeyword::Interface);
+        keywords.insert("private", ObjCKeyword::Private);
+        keywords.insert("protected", ObjCKeyword::Protected);
+        keywords.insert("protocol", ObjCKeyword::Protocol);
+        keywords.insert("public", ObjCKeyword::Public);
+        keywords.insert("selector", ObjCKeyword::Selector);
+        keywords.insert("throw", ObjCKeyword::Throw);
+        keywords.insert("try", ObjCKeyword::Try);
+        keywords.insert("catch", ObjCKeyword::Catch);
+        keywords.insert("finally", ObjCKeyword::Finally);
+        keywords.insert("synchronized", ObjCKeyword::Synchronized);
+        keywords.insert("autoreleasepool", ObjCKeyword::Autoreleasepool);
+        keywords.insert("property", ObjCKeyword::Property);
+        keywords.insert("package", ObjCKeyword::Package);
+        keywords.insert("required", ObjCKeyword::Required);
+        keywords.insert("optional", ObjCKeyword::Optional);
+        keywords.insert("synthesize", ObjCKeyword::Synthesize);
+        keywords.insert("dynamic", ObjCKeyword::Dynamic);
+        keywords.insert("import", ObjCKeyword::Import);
+        keywords.insert("available", ObjCKeyword::Available);
+
+        keywords
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +436,7 @@ enum Token {
     StringLiteral(String, Option<StringPrefix>),
     Identifier(String),
     Keyword(Keyword),
+    ObjCKeyword(ObjCKeyword),
     Punctuator(Punctuator),
 }
 
@@ -386,6 +450,7 @@ struct TokenIter<'a> {
     scanner: CharsScanner<'a>,
     position: Position,
     is_start_of_line: bool,
+    previous_token: Option<Token>,
 }
 
 impl<'a> TokenIter<'a> {
@@ -399,6 +464,7 @@ impl<'a> TokenIter<'a> {
             scanner,
             position,
             is_start_of_line: true,
+            previous_token: None,
         }
     }
 
@@ -601,7 +667,16 @@ impl<'a> TokenIter<'a> {
                 &mut identifier,
             );
 
-            if let Some(&keyword) = KEYWORDS.get(identifier.as_str()) {
+            let mut objc_keyword: Option<ObjCKeyword> = None;
+            if let Some(Token::Punctuator(Punctuator::At)) = self.previous_token {
+                if let Some(&keyword) = OBJC_KEYWORDS.get(identifier.as_str()) {
+                    objc_keyword = Some(keyword);
+                }
+            }
+
+            if let Some(keyword) = objc_keyword {
+                Token::ObjCKeyword(keyword)
+            } else if let Some(&keyword) = KEYWORDS.get(identifier.as_str()) {
                 Token::Keyword(keyword)
             } else {
                 match self.scanner.peek() {
@@ -845,9 +920,15 @@ impl<'a> Iterator for TokenIter<'a> {
                 break Some(Ok(token));
             }
         };
-        if let Some(Err(_)) = token {
-            // If an error occurs, go to the end of the file so you don't risk looping endlessly.
-            while let Some(_) = self.next() {}
+        match token {
+            Some(Err(_)) => {
+                // If an error occurs, go to the end of the file so you don't risk looping endlessly.
+                while let Some(_) = self.next() {}
+            }
+            Some(Ok(ref valid_token)) => {
+                self.previous_token = Some(valid_token.clone());
+            }
+            None => (),
         }
         token
     }
