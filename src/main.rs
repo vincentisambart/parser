@@ -525,8 +525,7 @@ impl<'a> TokenIter<'a> {
         if self.scanner.scan_one(any_of!('.')).is_some() {
             is_float = true;
             token.push('.');
-            self.scanner
-                .scan_append(char::is_ascii_hexdigit, &mut token);
+            self.scanner.scan_append(char::is_ascii_digit, &mut token);
             if let Some(e) = self.scanner.scan_one(any_of!('e', 'E')) {
                 token.push(e);
                 if let Some(sign) = self.scanner.scan_one(any_of!('-', '+')) {
@@ -1039,6 +1038,38 @@ mod tests {
         assert_eq!(
             parse_one_valid_token(r#""\x61\0\0123""#),
             Token::StringLiteral("a\0\n3".to_string(), None),
+        );
+    }
+
+    #[test]
+    fn test_number_literal() {
+        assert_eq!(
+            parse_one_valid_token("123"),
+            Token::IntegerLiteral("123".to_string(), IntegerRepr::Dec, None),
+        );
+        assert_eq!(
+            parse_one_valid_token("0x123"),
+            Token::IntegerLiteral("123".to_string(), IntegerRepr::Hex, None),
+        );
+        assert_eq!(
+            parse_one_valid_token("0.123"),
+            Token::FloatLiteral("0.123".to_string(), FloatRepr::Dec, None),
+        );
+        assert_eq!(
+            parse_one_valid_token("0.123f"),
+            Token::FloatLiteral(
+                "0.123".to_string(),
+                FloatRepr::Dec,
+                Some(FloatSuffix::Float),
+            ),
+        );
+        assert_eq!(
+            parse_one_valid_token("0x0.123p12L"),
+            Token::FloatLiteral(
+                "0.123p12".to_string(),
+                FloatRepr::Hex,
+                Some(FloatSuffix::LongDouble),
+            ),
         );
     }
 }
