@@ -647,7 +647,56 @@ impl<'a> TokenIter<'a> {
         Ok(Token::StringLiteral(string, prefix))
     }
 
-    fn handle_preprocessor_directive(&mut self, _directive: &[Token]) -> Result<(), LexError> {
+    fn handle_preprocessor_directive(&mut self, directive: &[Token]) -> Result<(), LexError> {
+        let mut iter = directive.iter();
+        match iter.next() {
+            Some(Token::Identifier(identifier)) => match identifier.as_str() {
+                // Handle "#line 1 file" as "#1 file"
+                "line" => return self.handle_preprocessor_directive(&directive[1..]),
+                _ => {
+                    return Err(LexError::InvalidPreprocessorDirective(
+                        self.position.clone(),
+                    ))
+                }
+            },
+            Some(Token::IntegerLiteral(literal, IntegerRepr::Dec, _)) => {
+                let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), 10) {
+                    number
+                } else {
+                    return Err(LexError::InvalidPreprocessorDirective(
+                        self.position.clone(),
+                    ));
+                };
+
+                let file_path;
+                if let Some(Token::StringLiteral(text, None)) = iter.next() {
+                    file_path = text;
+                } else {
+                    return Err(LexError::InvalidPreprocessorDirective(
+                        self.position.clone(),
+                    ));
+                }
+                self.position.line = line;
+                self.position.file_path = Rc::new(file_path.clone());
+
+                loop {
+                    match iter.next() {
+                        None => break,
+                        Some(Token::IntegerLiteral(_, _, _)) => (),
+                        Some(_) => {
+                            return Err(LexError::InvalidPreprocessorDirective(
+                                self.position.clone(),
+                            ))
+                        }
+                    }
+                }
+            }
+            _ => {
+                return Err(LexError::InvalidPreprocessorDirective(
+                    self.position.clone(),
+                ))
+            }
+        }
         Ok(())
     }
 
@@ -861,9 +910,9 @@ impl<'a> TokenIter<'a> {
 }
 
 impl<'a> Iterator for TokenIter<'a> {
-    type Item = Result<Token, LexError>;
+    type Item = Result<PositionedToken, LexError>;
 
-    fn next(&mut self) -> Option<Result<Token, LexError>> {
+    fn next(&mut self) -> Option<Result<PositionedToken, LexError>> {
         let mut preprocessor_directive: Option<Vec<Token>> = None;
 
         let token = loop {
@@ -917,7 +966,10 @@ impl<'a> Iterator for TokenIter<'a> {
             if let Some(ref mut directive) = preprocessor_directive {
                 directive.push(token);
             } else {
-                break Some(Ok(token));
+                break Some(Ok(PositionedToken {
+                    token,
+                    position: self.position.clone(),
+                }));
             }
         };
         match token {
@@ -926,156 +978,13 @@ impl<'a> Iterator for TokenIter<'a> {
                 while let Some(_) = self.next() {}
             }
             Some(Ok(ref valid_token)) => {
-                self.previous_token = Some(valid_token.clone());
+                self.previous_token = Some(valid_token.token.clone());
             }
             None => (),
         }
         token
     }
 }
-
-/*
-
-impl<'a> TokenIter<'a> {
-    fn from(text: &'a str) -> TokenIter<'a> {
-        let raw_iter = RawTokenIter::from(text);
-        let position = Position {
-            file_path: None,
-            line: 1,
-        };
-        TokenIter { raw_iter, position }
-    }
-
-    fn read_preprocessor_directive(&mut self) -> Result<(), LexError> {
-        let mut token = match self.raw_iter.next() {
-            None => {
-                return Err(LexError::InvalidPreprocessorDirective(
-                    self.position.clone(),
-                ))
-            }
-            Some(Err(error)) => return Err(error),
-            Some(Ok(token)) => token,
-        };
-        if let RawToken::Identifier(name) = token {
-            if name == "line" {
-                token = match self.raw_iter.next() {
-                    None => {
-                        return Err(LexError::InvalidPreprocessorDirective(
-                            self.position.clone(),
-                        ))
-                    }
-                    Some(Err(error)) => return Err(error),
-                    Some(Ok(token)) => token,
-                };
-            } else {
-                return Err(LexError::InvalidPreprocessorDirective(
-                    self.position.clone(),
-                ));
-            }
-        }
-
-        let line;
-        if let RawToken::IntegerLiteral(text, IntegerRepr::Dec, None) = token {
-            line = u32::from_str_radix(text.as_ref(), 10).unwrap();
-        } else {
-            return Err(LexError::InvalidPreprocessorDirective(
-                self.position.clone(),
-            ));
-        }
-
-        token = match self.raw_iter.next() {
-            None => {
-                return Err(LexError::InvalidPreprocessorDirective(
-                    self.position.clone(),
-                ))
-            }
-            Some(Err(error)) => return Err(error),
-            Some(Ok(token)) => token,
-        };
-
-        let file_path;
-        if let RawToken::StringLiteral(text, None) = token {
-            file_path = text;
-        } else {
-            return Err(LexError::InvalidPreprocessorDirective(
-                self.position.clone(),
-            ));
-        }
-        self.position.line = line;
-        self.position.file_path = Some(file_path);
-
-        loop {
-            match self.raw_iter.next() {
-                None | Some(Ok(RawToken::NewLine)) => return Ok(()),
-                Some(Err(error)) => return Err(error),
-                Some(Ok(RawToken::IntegerLiteral(_, _, _))) => (),
-                Some(Ok(_)) => {
-                    return Err(LexError::InvalidPreprocessorDirective(
-                        self.position.clone(),
-                    ))
-                }
-            }
-        }
-    }
-}
-
-impl<'a> Iterator for TokenIter<'a> {
-    type Item = Result<Token, LexError>;
-
-    fn next(&mut self) -> Option<Result<Token, LexError>> {
-        loop {
-            let token = match self.raw_iter.next() {
-                None => return None,
-                Some(Ok(token)) => token,
-                Some(Err(error)) => return Some(Err(error)),
-            };
-            match token {
-                RawToken::NewLine => self.position.line += 1,
-                RawToken::IntegerLiteral(text, repr, suffix) => {
-                    return Some(Ok(Token::IntegerLiteral(
-                        text,
-                        repr,
-                        suffix,
-                        self.position.clone(),
-                    )))
-                }
-                RawToken::FloatLiteral(text, repr, suffix) => {
-                    return Some(Ok(Token::FloatLiteral(
-                        text,
-                        repr,
-                        suffix,
-                        self.position.clone(),
-                    )));
-                }
-                RawToken::CharLiteral(c, prefix) => {
-                    return Some(Ok(Token::CharLiteral(c, prefix, self.position.clone())));
-                }
-                RawToken::StringLiteral(text, prefix) => {
-                    return Some(Ok(Token::StringLiteral(
-                        text,
-                        prefix,
-                        self.position.clone(),
-                    )));
-                }
-                RawToken::Keyword(keyword) => {
-                    return Some(Ok(Token::Keyword(keyword, self.position.clone())));
-                }
-                RawToken::Identifier(identifier) => {
-                    return Some(Ok(Token::Identifier(identifier, self.position.clone())));
-                }
-                RawToken::Punctuator(Punctuator::Hash) => {
-                    if let Err(error) = self.read_preprocessor_directive() {
-                        return Some(Err(error));
-                    }
-                }
-                RawToken::Punctuator(punctuator) => {
-                    return Some(Ok(Token::Punctuator(punctuator, self.position.clone())));
-                }
-            }
-        }
-    }
-}
-*/
 
 fn main() -> Result<(), LexError> {
     let iter = TokenIter::from(
