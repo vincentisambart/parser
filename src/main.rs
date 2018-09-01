@@ -2,10 +2,10 @@
 // - tests
 // - for punctuators, use a match
 // - move punctuators code to a different method
-// - handle \r \n \t... (look at clang's LiteralSupport.cpp)
 // - maybe use Rc for strings in tokens
 
 use lazy_static::lazy_static;
+use std::char;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::Chars;
@@ -584,19 +584,43 @@ impl<'a> TokenIter<'a> {
         }
     }
 
+    // The list of escapes comes from clang's LiteralSupport.cpp
     fn read_char_escape(&mut self) -> Result<char, LexError> {
-        if self.scanner.scan_one(any_of!('x')).is_some() {
-            panic!("TODO");
-        } else if self
-            .scanner
-            .scan_one(CharPattern::is_ascii_octdigit)
-            .is_some()
-        {
-            panic!("TODO");
-        } else if let Some(c) = self.scanner.next() {
-            Ok(c)
-        } else {
-            Err(LexError::UnexpectedEOF(self.position.clone()))
+        match self.scanner.next() {
+            None => Err(LexError::UnexpectedEOF(self.position.clone())),
+            Some('a') => Ok('\x07'),             // bell
+            Some('b') => Ok('\x08'),             // backspace
+            Some('e') | Some('E') => Ok('\x1b'), // escape
+            Some('f') => Ok('\x0c'),             // form feed
+            Some('n') => Ok('\n'),               // line feed
+            Some('r') => Ok('\r'),               // carriage return
+            Some('t') => Ok('\t'),               // tab
+            Some('v') => Ok('\x0b'),             // vertical tab
+            // hexadecimal escape
+            Some('x') => {
+                let mut x = 0u32;
+                while let Some(c) = self.scanner.scan_one(char::is_ascii_hexdigit) {
+                    let digit = c.to_digit(16).unwrap();
+                    x = (x << 4) | digit;
+                }
+                Ok(char::from_u32(x).unwrap())
+            }
+            // octal escape
+            Some(c) if c.is_ascii_octdigit() => {
+                let mut x: u32 = c.to_digit(8).unwrap();
+                let mut len = 1;
+                while let Some(c) = self.scanner.scan_one(CharPattern::is_ascii_octdigit) {
+                    let digit = c.to_digit(8).unwrap();
+                    x = (x << 3) | digit;
+                    // an octal escape is 3 chars max
+                    len += 1;
+                    if len >= 3 {
+                        break;
+                    }
+                }
+                Ok(char::from_u32(x).unwrap())
+            }
+            Some(c) => Ok(c),
         }
     }
 
@@ -1005,8 +1029,16 @@ mod tests {
     #[test]
     fn test_string_literal() {
         assert_eq!(
-            parse_one_valid_token(r#""abcd""#),
-            Token::StringLiteral("abcd".to_string(), None)
+            parse_one_valid_token(r#""abcd\"""#),
+            Token::StringLiteral("abcd\"".to_string(), None),
+        );
+        assert_eq!(
+            parse_one_valid_token(r#""a\tbc\nd""#),
+            Token::StringLiteral("a\tbc\nd".to_string(), None),
+        );
+        assert_eq!(
+            parse_one_valid_token(r#""\x61\0\0123""#),
+            Token::StringLiteral("a\0\n3".to_string(), None),
         );
     }
 }
