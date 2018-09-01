@@ -446,6 +446,12 @@ struct PositionedToken {
     position: Position,
 }
 
+impl PositionedToken {
+    fn new(token: Token, position: Position) -> PositionedToken {
+        PositionedToken { token, position }
+    }
+}
+
 struct TokenIter<'a> {
     scanner: CharsScanner<'a>,
     position: Position,
@@ -454,8 +460,8 @@ struct TokenIter<'a> {
 }
 
 impl<'a> TokenIter<'a> {
-    fn from(text: &'a str) -> TokenIter<'a> {
-        let scanner = CharsScanner::from(text);
+    fn from(code: &'a str) -> TokenIter<'a> {
+        let scanner = CharsScanner::from(code);
         let position = Position {
             file_path: Rc::new("<unknown>".to_string()),
             line: 1,
@@ -966,10 +972,7 @@ impl<'a> Iterator for TokenIter<'a> {
             if let Some(ref mut directive) = preprocessor_directive {
                 directive.push(token);
             } else {
-                break Some(Ok(PositionedToken {
-                    token,
-                    position: self.position.clone(),
-                }));
+                break Some(Ok(PositionedToken::new(token, self.position.clone())));
             }
         };
         match token {
@@ -983,6 +986,28 @@ impl<'a> Iterator for TokenIter<'a> {
             None => (),
         }
         token
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_one_valid_token(code: &str) -> Token {
+        let mut iter = TokenIter::from(code);
+        let token = iter.next().unwrap().unwrap();
+        if let Some(_) = iter.next() {
+            panic!("Multiple tokens found in {:}", code);
+        }
+        token.token
+    }
+
+    #[test]
+    fn test_string_literal() {
+        assert_eq!(
+            parse_one_valid_token(r#""abcd""#),
+            Token::StringLiteral("abcd".to_string(), None)
+        );
     }
 }
 
