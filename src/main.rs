@@ -1,3 +1,5 @@
+// Notes
+// - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 mod lex;
 use crate::lex::LexError;
 use crate::lex::TokenIter;

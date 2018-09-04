@@ -3,6 +3,9 @@
 // - for punctuators, use a match
 // - move punctuators code to a different method
 // - maybe use Rc for strings in tokens
+// - maybe support universal character names
+// - maybe support other non-ascii identifiers (check what clang does)
+// - handle more preprocessing directives (#error, unknown #pragma should be an error...)
 
 use lazy_static::lazy_static;
 use std::char;
@@ -425,7 +428,7 @@ lazy_static! {
 pub enum LexError {
     UnexpectedEOF(Position),
     UnexpectedChar(char, Position),
-    InvalidPreprocessorDirective(Position),
+    InvalidPreprocessingDirective(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -676,14 +679,15 @@ impl<'a> TokenIter<'a> {
         Ok(Token::StringLiteral(string, prefix))
     }
 
-    fn handle_preprocessor_directive(&mut self, directive: &[Token]) -> Result<(), LexError> {
+    fn handle_preprocessing_directive(&mut self, directive: &[Token]) -> Result<(), LexError> {
         let mut iter = directive.iter();
         match iter.next() {
+            None => (), // empty preprocessing directive
             Some(Token::Identifier(identifier)) => match identifier.as_str() {
                 // Handle "#line 1 file" as "#1 file"
-                "line" => return self.handle_preprocessor_directive(&directive[1..]),
+                "line" => return self.handle_preprocessing_directive(&directive[1..]),
                 _ => {
-                    return Err(LexError::InvalidPreprocessorDirective(
+                    return Err(LexError::InvalidPreprocessingDirective(
                         self.position.clone(),
                     ))
                 }
@@ -692,7 +696,7 @@ impl<'a> TokenIter<'a> {
                 let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), 10) {
                     number
                 } else {
-                    return Err(LexError::InvalidPreprocessorDirective(
+                    return Err(LexError::InvalidPreprocessingDirective(
                         self.position.clone(),
                     ));
                 };
@@ -701,7 +705,7 @@ impl<'a> TokenIter<'a> {
                 if let Some(Token::StringLiteral(text, None)) = iter.next() {
                     file_path = text;
                 } else {
-                    return Err(LexError::InvalidPreprocessorDirective(
+                    return Err(LexError::InvalidPreprocessingDirective(
                         self.position.clone(),
                     ));
                 }
@@ -713,7 +717,7 @@ impl<'a> TokenIter<'a> {
                         None => break,
                         Some(Token::IntegerLiteral(_, _, _)) => (),
                         Some(_) => {
-                            return Err(LexError::InvalidPreprocessorDirective(
+                            return Err(LexError::InvalidPreprocessingDirective(
                                 self.position.clone(),
                             ))
                         }
@@ -721,7 +725,7 @@ impl<'a> TokenIter<'a> {
                 }
             }
             _ => {
-                return Err(LexError::InvalidPreprocessorDirective(
+                return Err(LexError::InvalidPreprocessingDirective(
                     self.position.clone(),
                 ))
             }
@@ -942,7 +946,7 @@ impl<'a> Iterator for TokenIter<'a> {
     type Item = Result<PositionedToken, LexError>;
 
     fn next(&mut self) -> Option<Result<PositionedToken, LexError>> {
-        let mut preprocessor_directive: Option<Vec<Token>> = None;
+        let mut preprocessing_directive: Option<Vec<Token>> = None;
 
         let token = loop {
             self.scanner.skip_while(any_of!(' ', '\t'));
@@ -958,11 +962,11 @@ impl<'a> Iterator for TokenIter<'a> {
                 is_end_of_line = true;
             };
             if is_end_of_line || is_end_of_file {
-                if let Some(ref mut directive) = preprocessor_directive {
-                    if let Err(err) = self.handle_preprocessor_directive(directive.as_ref()) {
+                if let Some(ref mut directive) = preprocessing_directive {
+                    if let Err(err) = self.handle_preprocessing_directive(directive.as_ref()) {
                         break Some(Err(err));
                     };
-                    preprocessor_directive = None;
+                    preprocessing_directive = None;
                 } else {
                     self.position.line += 1;
                 }
@@ -981,18 +985,18 @@ impl<'a> Iterator for TokenIter<'a> {
             };
             if token == Token::Punctuator(Punctuator::Hash) {
                 if !self.is_start_of_line {
-                    break Some(Err(LexError::InvalidPreprocessorDirective(
+                    break Some(Err(LexError::InvalidPreprocessingDirective(
                         self.position.clone(),
                     )));
                 } else {
-                    preprocessor_directive = Some(Vec::new());
+                    preprocessing_directive = Some(Vec::new());
                     self.is_start_of_line = false;
                     continue;
                 }
             }
             self.is_start_of_line = false;
 
-            if let Some(ref mut directive) = preprocessor_directive {
+            if let Some(ref mut directive) = preprocessing_directive {
                 directive.push(token);
             } else {
                 break Some(Ok(PositionedToken::new(token, self.position.clone())));
