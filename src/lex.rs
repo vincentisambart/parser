@@ -453,6 +453,14 @@ impl PositionedToken {
     fn new(token: Token, position: Position) -> PositionedToken {
         PositionedToken { token, position }
     }
+
+    pub fn token(&self) -> Token {
+        self.token.clone()
+    }
+
+    pub fn position(&self) -> Position {
+        self.position.clone()
+    }
 }
 
 pub struct TokenIter<'a> {
