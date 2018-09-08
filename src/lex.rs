@@ -6,6 +6,8 @@
 // - maybe support universal character names
 // - maybe support other non-ascii identifiers (check what clang does)
 // - handle more preprocessing directives (#error, unknown #pragma should be an error...)
+// - maybe use io::Read instead of std::Chars
+// - do not go to end when error but make sure to skip the error character to not risking ending in an infinite loop
 
 use lazy_static::lazy_static;
 use std::char;

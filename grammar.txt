@@ -263,4 +263,3 @@
   | declaration
 6.9.1 function-definition:
   | declaration-specifiers declarator declaration* compound-statement
-
