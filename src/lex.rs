@@ -97,30 +97,6 @@ impl<'a> CharsScanner<'a> {
         }
     }
 
-    fn scan_two<F1, F2>(&mut self, mut matcher1: F1, mut matcher2: F2) -> Option<(char, char)>
-    where
-        F1: FnMut(&char) -> bool,
-        F2: FnMut(&char) -> bool,
-    {
-        let mut tmp = self.chars.clone();
-        let c1 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher1(&c1) {
-            return None;
-        }
-        let c2 = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if !matcher2(&c2) {
-            return None;
-        }
-        self.chars = tmp;
-        Some((c1, c2))
-    }
-
     fn check_one<F>(&mut self, mut matcher: F) -> Option<char>
     where
         F: FnMut(&char) -> bool,
@@ -470,6 +446,7 @@ pub struct TokenIter<'a> {
     position: Position,
     is_start_of_line: bool,
     previous_token: Option<Token>,
+    next_token_to_return: Option<Token>,
 }
 
 impl<'a> TokenIter<'a> {
@@ -484,6 +461,7 @@ impl<'a> TokenIter<'a> {
             position,
             is_start_of_line: true,
             previous_token: None,
+            next_token_to_return: None,
         }
     }
 
@@ -867,8 +845,13 @@ impl<'a> TokenIter<'a> {
                 Token::Punctuator(Punctuator::Greater)
             }
         } else if self.scanner.scan_one(any_of!('.')).is_some() {
-            if self.scanner.scan_two(any_of!('.'), any_of!('.')).is_some() {
-                Token::Punctuator(Punctuator::Ellipsis)
+            if self.scanner.scan_one(any_of!('.')).is_some() {
+                if self.scanner.scan_one(any_of!('.')).is_some() {
+                    Token::Punctuator(Punctuator::Ellipsis)
+                } else {
+                    self.next_token_to_return = Some(Token::Punctuator(Punctuator::Period));
+                    Token::Punctuator(Punctuator::Period)
+                }
             } else {
                 Token::Punctuator(Punctuator::Period)
             }
@@ -900,8 +883,23 @@ impl<'a> TokenIter<'a> {
                 Token::Punctuator(Punctuator::RightCurlyBracket)
             } else if self.scanner.scan_one(any_of!(':')).is_some() {
                 // digraph
-                if self.scanner.scan_two(any_of!(':'), any_of!('>')).is_some() {
-                    Token::Punctuator(Punctuator::HashHash)
+                if self.scanner.scan_one(any_of!('%')).is_some() {
+                    if self.scanner.scan_one(any_of!(':')).is_some() {
+                        Token::Punctuator(Punctuator::HashHash)
+                    } else {
+                        if self.scanner.scan_one(any_of!('=')).is_some() {
+                            self.next_token_to_return =
+                                Some(Token::Punctuator(Punctuator::PercentEqual));
+                        } else if self.scanner.scan_one(any_of!('>')).is_some() {
+                            // digraph
+                            self.next_token_to_return =
+                                Some(Token::Punctuator(Punctuator::RightCurlyBracket));
+                        } else {
+                            self.next_token_to_return =
+                                Some(Token::Punctuator(Punctuator::Percent));
+                        }
+                        Token::Punctuator(Punctuator::Hash)
+                    }
                 } else {
                     Token::Punctuator(Punctuator::Hash)
                 }
@@ -956,6 +954,10 @@ impl<'a> Iterator for TokenIter<'a> {
     type Item = Result<PositionedToken, LexError>;
 
     fn next(&mut self) -> Option<Result<PositionedToken, LexError>> {
+        if let Some(token) = self.next_token_to_return.take() {
+            return Some(Ok(PositionedToken::new(token, self.position.clone())));
+        }
+
         let mut preprocessing_directive: Option<Vec<Token>> = None;
 
         let token = loop {
@@ -1039,6 +1041,11 @@ mod tests {
         token.token
     }
 
+    fn parse_valid_tokens(code: &str) -> Vec<Token> {
+        let iter = TokenIter::from(code);
+        iter.map(|token| token.unwrap().token).collect()
+    }
+
     #[test]
     fn test_string_literal() {
         assert_eq!(
@@ -1084,6 +1091,29 @@ mod tests {
                 FloatRepr::Hex,
                 Some(FloatSuffix::LongDouble),
             ),
+        );
+    }
+
+    #[test]
+    fn test_punctuators() {
+        assert_eq!(
+            parse_one_valid_token("%:%:"),
+            Token::Punctuator(Punctuator::HashHash),
+        );
+        assert_eq!(
+            parse_valid_tokens(".."),
+            vec!(
+                Token::Punctuator(Punctuator::Period),
+                Token::Punctuator(Punctuator::Period)
+            ),
+        );
+        assert_eq!(
+            parse_one_valid_token("..."),
+            Token::Punctuator(Punctuator::Ellipsis),
+        );
+        assert_eq!(
+            parse_one_valid_token("%:%:"),
+            Token::Punctuator(Punctuator::HashHash),
         );
     }
 }
