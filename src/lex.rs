@@ -9,9 +9,11 @@
 // - maybe use io::Read instead of std::Chars
 // - do not go to end when error but make sure to skip the error character to not risking ending in an infinite loop
 
+use crate::scan::{Scan, ScanPush};
 use lazy_static::lazy_static;
 use std::char;
 use std::collections::HashMap;
+use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::Chars;
 
@@ -35,102 +37,6 @@ impl CharPattern for char {
         match self {
             '0'..='7' => true,
             _ => false,
-        }
-    }
-}
-
-struct CharsScanner<'a> {
-    chars: Chars<'a>,
-}
-
-impl<'a> CharsScanner<'a> {
-    fn from(text: &'a str) -> CharsScanner<'a> {
-        CharsScanner {
-            chars: text.chars(),
-        }
-    }
-
-    fn peek(&mut self) -> Option<char> {
-        let old = self.chars.clone();
-        let opt = self.chars.next();
-        self.chars = old;
-        opt
-    }
-
-    fn skip_while<F>(&mut self, mut matcher: F)
-    where
-        F: FnMut(&char) -> bool,
-    {
-        loop {
-            let old = self.chars.clone();
-            let c = match self.chars.next() {
-                Some(c) => c,
-                None => break,
-            };
-
-            if !matcher(&c) {
-                self.chars = old;
-                break;
-            }
-        }
-    }
-
-    fn next(&mut self) -> Option<char> {
-        self.chars.next()
-    }
-
-    fn scan_one<F>(&mut self, mut matcher: F) -> Option<char>
-    where
-        F: FnMut(&char) -> bool,
-    {
-        let old = self.chars.clone();
-        let c = match self.chars.next() {
-            Some(c) => c,
-            None => return None,
-        };
-
-        if matcher(&c) {
-            Some(c)
-        } else {
-            self.chars = old;
-            None
-        }
-    }
-
-    fn check_one<F>(&mut self, mut matcher: F) -> Option<char>
-    where
-        F: FnMut(&char) -> bool,
-    {
-        let mut tmp = self.chars.clone();
-        let c = match tmp.next() {
-            Some(c) => c,
-            None => return None,
-        };
-        if matcher(&c) {
-            Some(c)
-        } else {
-            None
-        }
-    }
-
-    fn scan_append<F>(&mut self, mut matcher: F, string: &mut String)
-    where
-        F: FnMut(&char) -> bool,
-    {
-        loop {
-            let old = self.chars.clone();
-
-            match self.chars.next() {
-                Some(c) => {
-                    if matcher(&c) {
-                        string.push(c);
-                    } else {
-                        self.chars = old;
-                        break;
-                    }
-                }
-                None => break,
-            }
         }
     }
 }
@@ -442,7 +348,7 @@ impl PositionedToken {
 }
 
 pub struct TokenIter<'a> {
-    scanner: CharsScanner<'a>,
+    scanner: Peekable<Chars<'a>>,
     position: Position,
     is_start_of_line: bool,
     previous_token: Option<Token>,
@@ -451,7 +357,7 @@ pub struct TokenIter<'a> {
 
 impl<'a> TokenIter<'a> {
     pub fn from(code: &'a str) -> TokenIter<'a> {
-        let scanner = CharsScanner::from(code);
+        let scanner = code.chars().peekable();
         let position = Position {
             file_path: Rc::new("<unknown>".to_string()),
             line: 1,
@@ -471,15 +377,13 @@ impl<'a> TokenIter<'a> {
         if self.scanner.scan_one(any_of!('0')).is_some() {
             if self.scanner.scan_one(any_of!('x', 'X')).is_some() {
                 // hexadecimal
-                self.scanner
-                    .scan_append(char::is_ascii_hexdigit, &mut token);
+                self.scanner.scan_push(char::is_ascii_hexdigit, &mut token);
                 assert!(!token.is_empty());
                 let mut is_float = false;
                 if self.scanner.scan_one(any_of!('.')).is_some() {
                     is_float = true;
                     token.push('.');
-                    self.scanner
-                        .scan_append(char::is_ascii_hexdigit, &mut token);
+                    self.scanner.scan_push(char::is_ascii_hexdigit, &mut token);
                 }
                 if let Some(p) = self.scanner.scan_one(any_of!('p', 'P')) {
                     is_float = true;
@@ -487,7 +391,7 @@ impl<'a> TokenIter<'a> {
                     if let Some(sign) = self.scanner.scan_one(any_of!('-', '+')) {
                         token.push(sign);
                     }
-                    self.scanner.scan_append(char::is_ascii_digit, &mut token);
+                    self.scanner.scan_push(char::is_ascii_digit, &mut token);
                 }
                 if is_float {
                     let suffix = self.read_float_suffix();
@@ -500,7 +404,7 @@ impl<'a> TokenIter<'a> {
                 // octal
                 token.push(digit);
                 self.scanner
-                    .scan_append(CharPattern::is_ascii_octdigit, &mut token);
+                    .scan_push(CharPattern::is_ascii_octdigit, &mut token);
                 return Ok(Token::IntegerLiteral(
                     token,
                     IntegerRepr::Oct,
@@ -511,18 +415,18 @@ impl<'a> TokenIter<'a> {
             token.push('0');
         }
 
-        self.scanner.scan_append(char::is_ascii_digit, &mut token);
+        self.scanner.scan_push(char::is_ascii_digit, &mut token);
         let mut is_float = false;
         if self.scanner.scan_one(any_of!('.')).is_some() {
             is_float = true;
             token.push('.');
-            self.scanner.scan_append(char::is_ascii_digit, &mut token);
+            self.scanner.scan_push(char::is_ascii_digit, &mut token);
             if let Some(e) = self.scanner.scan_one(any_of!('e', 'E')) {
                 token.push(e);
                 if let Some(sign) = self.scanner.scan_one(any_of!('-', '+')) {
                     token.push(sign);
                 }
-                self.scanner.scan_append(char::is_ascii_digit, &mut token);
+                self.scanner.scan_push(char::is_ascii_digit, &mut token);
             }
         }
         if let Some(e) = self.scanner.scan_one(any_of!('e', 'E')) {
@@ -531,7 +435,7 @@ impl<'a> TokenIter<'a> {
             if let Some(sign) = self.scanner.scan_one(any_of!('-', '+')) {
                 token.push(sign);
             }
-            self.scanner.scan_append(char::is_ascii_digit, &mut token);
+            self.scanner.scan_push(char::is_ascii_digit, &mut token);
         }
         if is_float {
             let suffix = self.read_float_suffix();
@@ -732,7 +636,7 @@ impl<'a> TokenIter<'a> {
         } else if let Some(c) = self.scanner.scan_one(any_of!('a'..='z', 'A'..='Z', '_')) {
             let mut identifier = String::new();
             identifier.push(c);
-            self.scanner.scan_append(
+            self.scanner.scan_push(
                 any_of!('a'..='z', 'A'..='Z', '0'..='9', '_'),
                 &mut identifier,
             );
@@ -942,7 +846,7 @@ impl<'a> TokenIter<'a> {
             Token::Punctuator(Punctuator::At)
         } else {
             return Err(LexError::UnexpectedChar(
-                self.scanner.peek().unwrap(),
+                *self.scanner.peek().unwrap(),
                 self.position.clone(),
             ));
         };
@@ -961,7 +865,7 @@ impl<'a> Iterator for TokenIter<'a> {
         let mut preprocessing_directive: Option<Vec<Token>> = None;
 
         let token = loop {
-            self.scanner.skip_while(any_of!(' ', '\t'));
+            self.scanner.skip_matching(any_of!(' ', '\t'));
 
             let mut is_end_of_line = false;
             let mut is_end_of_file = false;

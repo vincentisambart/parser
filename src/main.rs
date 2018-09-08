@@ -1,6 +1,7 @@
 // Notes
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 mod lex;
+mod scan;
 use crate::lex::{Keyword, LexError, Position, Punctuator, Token, TokenIter};
 use std::iter::Peekable;
 
