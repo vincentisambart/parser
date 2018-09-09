@@ -40,14 +40,11 @@ where
     where
         F: FnMut(&Self::Item) -> bool,
     {
-        loop {
-            match self.peek() {
-                Some(x) => if matcher(x) {
-                    self.next()
-                } else {
-                    break;
-                },
-                None => break,
+        while let Some(x) = self.peek() {
+            if matcher(x) {
+                self.next()
+            } else {
+                break;
             };
         }
     }
@@ -81,14 +78,11 @@ where
     where
         F: FnMut(&char) -> bool,
     {
-        loop {
-            match self.peek() {
-                Some(c) => if matcher(c) {
-                    string.push(*c);
-                } else {
-                    break;
-                },
-                None => break,
+        while let Some(c) = self.peek() {
+            if matcher(c) {
+                string.push(*c);
+            } else {
+                break;
             };
             self.next();
         }

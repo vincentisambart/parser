@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
                 self.iter.next();
                 Ok(Some(ExternalDeclaration::Declaration(identifier, ty)))
             }
-            _ => return Err(ParseError::UnexpectedToken(token.token(), token.position())),
+            _ => Err(ParseError::UnexpectedToken(token.token(), token.position())),
         }
     }
 }
