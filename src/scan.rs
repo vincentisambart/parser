@@ -1,33 +1,39 @@
 use std::iter::Peekable;
 
-pub trait Scan {
-    type Item;
-
-    fn scan_one<F>(&mut self, matcher: F) -> Option<Self::Item>
+pub trait Peeking<I: Iterator> {
+    fn next_if<F>(&mut self, predicate: F) -> Option<I::Item>
     where
-        F: FnMut(&Self::Item) -> bool;
+        F: FnMut(&I::Item) -> bool;
 
-    fn skip_matching<F>(&mut self, matcher: F)
+    fn advance_while<F>(&mut self, predicate: F)
     where
-        F: FnMut(&Self::Item) -> bool;
+        F: FnMut(&I::Item) -> bool;
 
-    fn check_one<F>(&mut self, matcher: F) -> Option<&Self::Item>
+    fn peeking_does_match<F>(&mut self, predicate: F) -> bool
     where
-        F: FnMut(&Self::Item) -> bool;
+        F: FnMut(&I::Item) -> bool;
+
+    fn push_while<F>(&mut self, string: &mut String, predicate: F)
+    where
+        F: FnMut(&char) -> bool,
+        I: Iterator<Item = char>;
+
+    fn next_if_lifting_err<T, E, F>(&mut self, predicate: F) -> Result<Option<T>, E>
+    where
+        F: FnMut(&T) -> bool,
+        I: Iterator<Item = Result<T, E>>;
 }
 
-impl<I> Scan for Peekable<I>
+impl<I> Peeking<I> for Peekable<I>
 where
     I: Iterator,
 {
-    type Item = I::Item;
-
-    fn scan_one<F>(&mut self, mut matcher: F) -> Option<Self::Item>
+    fn next_if<F>(&mut self, mut predicate: F) -> Option<I::Item>
     where
-        F: FnMut(&Self::Item) -> bool,
+        F: FnMut(&I::Item) -> bool,
     {
         match self.peek() {
-            Some(x) => if matcher(x) {
+            Some(x) => if predicate(x) {
                 self.next()
             } else {
                 None
@@ -36,12 +42,12 @@ where
         }
     }
 
-    fn skip_matching<F>(&mut self, mut matcher: F)
+    fn advance_while<F>(&mut self, mut predicate: F)
     where
-        F: FnMut(&Self::Item) -> bool,
+        F: FnMut(&I::Item) -> bool,
     {
         while let Some(x) = self.peek() {
-            if matcher(x) {
+            if predicate(x) {
                 self.next()
             } else {
                 break;
@@ -49,37 +55,42 @@ where
         }
     }
 
-    fn check_one<F>(&mut self, mut matcher: F) -> Option<&Self::Item>
+    fn peeking_does_match<F>(&mut self, mut predicate: F) -> bool
     where
-        F: FnMut(&Self::Item) -> bool,
+        F: FnMut(&I::Item) -> bool,
     {
         match self.peek() {
-            Some(x) => if matcher(x) {
-                Some(x)
+            Some(x) => if predicate(x) {
+                true
             } else {
-                None
+                false
             },
-            None => None,
+            None => false,
         }
     }
-}
 
-pub trait ScanErr<T, E> {
-    fn scan_one_err<F>(&mut self, matcher: F) -> Result<Option<T>, E>
+    fn push_while<F>(&mut self, string: &mut String, mut predicate: F)
     where
-        F: FnMut(&T) -> bool;
-}
+        F: FnMut(&char) -> bool,
+        I: Iterator<Item = char>,
+    {
+        while let Some(c) = self.peek() {
+            if predicate(c) {
+                string.push(*c);
+            } else {
+                break;
+            };
+            self.next();
+        }
+    }
 
-impl<I, T, E> ScanErr<T, E> for Peekable<I>
-where
-    I: Iterator<Item = Result<T, E>>,
-{
-    fn scan_one_err<F>(&mut self, mut matcher: F) -> Result<Option<T>, E>
+    fn next_if_lifting_err<T, E, F>(&mut self, mut predicate: F) -> Result<Option<T>, E>
     where
         F: FnMut(&T) -> bool,
+        I: Iterator<Item = Result<T, E>>,
     {
         match self.peek() {
-            Some(Ok(x)) => if matcher(x) {
+            Some(Ok(x)) => if predicate(x) {
                 if let Some(Ok(x)) = self.next() {
                     Ok(Some(x))
                 } else {
@@ -96,31 +107,6 @@ where
                 }
             }
             None => Ok(None),
-        }
-    }
-}
-
-pub trait ScanPush {
-    fn scan_push<F>(&mut self, matcher: F, string: &mut String)
-    where
-        F: FnMut(&char) -> bool;
-}
-
-impl<I> ScanPush for Peekable<I>
-where
-    I: Iterator<Item = char>,
-{
-    fn scan_push<F>(&mut self, mut matcher: F, string: &mut String)
-    where
-        F: FnMut(&char) -> bool,
-    {
-        while let Some(c) = self.peek() {
-            if matcher(c) {
-                string.push(*c);
-            } else {
-                break;
-            };
-            self.next();
         }
     }
 }

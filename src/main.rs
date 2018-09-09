@@ -2,11 +2,52 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 mod lex;
 mod scan;
-use crate::lex::{Keyword, LexError, Position, Punctuator, Token, TokenIter};
-use crate::scan::{Scan, ScanErr};
+use crate::lex::{Keyword, LexError, Position, PositionedToken, Punctuator, Token, TokenIter};
+use crate::scan::Peeking;
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::rc::Rc;
+
+trait PeekingToken {
+    fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, LexError>;
+    fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, LexError>;
+    fn next_if_any_ident(&mut self) -> Result<Option<String>, LexError>;
+}
+
+impl<I> PeekingToken for Peekable<I>
+where
+    I: Iterator<Item = Result<PositionedToken, LexError>>,
+{
+    fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
+        let token = self.next_if_lifting_err(|token| match token.token() {
+            Token::Keyword(x) if x == kw => true,
+            _ => false,
+        })?;
+        Ok(token.is_some())
+    }
+
+    fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, LexError> {
+        let token = self.next_if_lifting_err(|token| match token.token() {
+            Token::Punctuator(x) if x == punc => true,
+            _ => false,
+        })?;
+        Ok(token.is_some())
+    }
+
+    fn next_if_any_ident(&mut self) -> Result<Option<String>, LexError> {
+        let token = self.next_if_lifting_err(|token| match token.token() {
+            Token::Identifier(_) => true,
+            _ => false,
+        })?;
+        match token {
+            Some(token) => match token.token() {
+                Token::Identifier(ident) => Ok(Some(ident)),
+                _ => unreachable!(),
+            },
+            None => Ok(None),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PrimitiveType {
@@ -126,109 +167,79 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn scan_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
-        let token = self.iter.scan_one_err(|token| match token.token() {
-            Token::Keyword(x) if x == kw => true,
-            _ => false,
-        })?;
-        Ok(token.is_some())
-    }
-
-    fn scan_punc(&mut self, punc: Punctuator) -> Result<bool, LexError> {
-        let token = self.iter.scan_one_err(|token| match token.token() {
-            Token::Punctuator(x) if x == punc => true,
-            _ => false,
-        })?;
-        Ok(token.is_some())
-    }
-
-    fn scan_ident(&mut self) -> Result<Option<String>, LexError> {
-        let token = self.iter.scan_one_err(|token| match token.token() {
-            Token::Identifier(_) => true,
-            _ => false,
-        })?;
-        match token {
-            Some(token) => match token.token() {
-                Token::Identifier(ident) => Ok(Some(ident)),
-                _ => unreachable!(),
-            },
-            None => Ok(None),
-        }
-    }
-
     fn read_primitive_type(&mut self) -> Result<Option<PrimitiveType>, ParseError> {
-        let ty = if self.scan_kw(Keyword::Void)? {
+        let ty = if self.iter.advance_if_kw(Keyword::Void)? {
             Some(PrimitiveType::Void)
-        } else if self.scan_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Char)? {
             Some(PrimitiveType::Char)
-        } else if self.scan_kw(Keyword::Signed)? {
-            if self.scan_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Signed)? {
+            if self.iter.advance_if_kw(Keyword::Char)? {
                 Some(PrimitiveType::SignedChar)
-            } else if self.scan_kw(Keyword::Short)? {
-                self.scan_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Short)? {
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::Short)
-            } else if self.scan_kw(Keyword::Long)? {
-                if self.scan_kw(Keyword::Long)? {
-                    self.scan_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Long)? {
+                if self.iter.advance_if_kw(Keyword::Long)? {
+                    self.iter.advance_if_kw(Keyword::Int)?;
                     Some(PrimitiveType::LongLong)
                 } else {
-                    self.scan_kw(Keyword::Int)?;
+                    self.iter.advance_if_kw(Keyword::Int)?;
                     Some(PrimitiveType::Long)
                 }
             } else {
-                self.scan_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::Int)
             }
-        } else if self.scan_kw(Keyword::Unsigned)? {
-            if self.scan_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Unsigned)? {
+            if self.iter.advance_if_kw(Keyword::Char)? {
                 Some(PrimitiveType::UnsignedChar)
-            } else if self.scan_kw(Keyword::Short)? {
-                self.scan_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Short)? {
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::UnsignedShort)
-            } else if self.scan_kw(Keyword::Long)? {
-                if self.scan_kw(Keyword::Long)? {
-                    self.scan_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Long)? {
+                if self.iter.advance_if_kw(Keyword::Long)? {
+                    self.iter.advance_if_kw(Keyword::Int)?;
                     Some(PrimitiveType::UnsignedLongLong)
                 } else {
-                    self.scan_kw(Keyword::Int)?;
+                    self.iter.advance_if_kw(Keyword::Int)?;
                     Some(PrimitiveType::UnsignedLong)
                 }
             } else {
-                self.scan_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::UnsignedInt)
             }
-        } else if self.scan_kw(Keyword::Short)? {
-            self.scan_kw(Keyword::Int)?;
+        } else if self.iter.advance_if_kw(Keyword::Short)? {
+            self.iter.advance_if_kw(Keyword::Int)?;
             Some(PrimitiveType::Short)
-        } else if self.scan_kw(Keyword::Int)? {
+        } else if self.iter.advance_if_kw(Keyword::Int)? {
             Some(PrimitiveType::Int)
-        } else if self.scan_kw(Keyword::Long)? {
-            if self.scan_kw(Keyword::Long)? {
-                self.scan_kw(Keyword::Int)?;
+        } else if self.iter.advance_if_kw(Keyword::Long)? {
+            if self.iter.advance_if_kw(Keyword::Long)? {
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::LongLong)
-            } else if self.scan_kw(Keyword::Double)? {
-                if self.scan_kw(Keyword::Complex)? {
+            } else if self.iter.advance_if_kw(Keyword::Double)? {
+                if self.iter.advance_if_kw(Keyword::Complex)? {
                     Some(PrimitiveType::LongDoubleComplex)
                 } else {
                     Some(PrimitiveType::LongDouble)
                 }
             } else {
-                self.scan_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int)?;
                 Some(PrimitiveType::Long)
             }
-        } else if self.scan_kw(Keyword::Float)? {
-            if self.scan_kw(Keyword::Complex)? {
+        } else if self.iter.advance_if_kw(Keyword::Float)? {
+            if self.iter.advance_if_kw(Keyword::Complex)? {
                 Some(PrimitiveType::FloatComplex)
             } else {
                 Some(PrimitiveType::Float)
             }
-        } else if self.scan_kw(Keyword::Double)? {
-            if self.scan_kw(Keyword::Complex)? {
+        } else if self.iter.advance_if_kw(Keyword::Double)? {
+            if self.iter.advance_if_kw(Keyword::Complex)? {
                 Some(PrimitiveType::DoubleComplex)
             } else {
                 Some(PrimitiveType::Double)
             }
-        } else if self.scan_kw(Keyword::Bool)? {
+        } else if self.iter.advance_if_kw(Keyword::Bool)? {
             Some(PrimitiveType::Bool)
         } else {
             None
@@ -245,14 +256,14 @@ impl<'a> Parser<'a> {
         let mut ty = self
             .read_type()?
             .unwrap_or(Type::Primitive(PrimitiveType::Int));
-        while self.scan_punc(Punctuator::Star)? {
+        while self.iter.advance_if_punc(Punctuator::Star)? {
             // TODO: Should be in read_type?
             ty = Type::Pointer(Box::new(ty));
         }
-        if self.scan_punc(Punctuator::Semicolon)? {
+        if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             return Ok(Some(ExternalDeclaration::Nothing));
         }
-        let ident = if let Some(ident) = self.scan_ident()? {
+        let ident = if let Some(ident) = self.iter.next_if_any_ident()? {
             ident
         } else {
             return match self.iter.next() {
@@ -266,7 +277,7 @@ impl<'a> Parser<'a> {
             };
         };
 
-        if self.scan_punc(Punctuator::Semicolon)? {
+        if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             Ok(Some(ExternalDeclaration::Declaration(ident, ty)))
         } else {
             match self.iter.next() {
