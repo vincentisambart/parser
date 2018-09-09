@@ -3,7 +3,7 @@
 mod lex;
 mod scan;
 use crate::lex::{Keyword, LexError, Position, Punctuator, Token, TokenIter};
-use crate::scan::Scan;
+use crate::scan::{Scan, ScanErr};
 use std::iter::Peekable;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,6 +32,7 @@ enum PrimitiveType {
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
     Primitive(PrimitiveType),
+    Pointer(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,18 +111,19 @@ impl<'a> Parser<'a> {
     }
 
     fn scan_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
-        let token = self.iter.scan_one(|res| match res {
-            Ok(token) => match token.token() {
-                Token::Keyword(x) if x == kw => true,
-                _ => false,
-            },
-            Err(_) => true,
-        });
-        match token {
-            Some(Ok(_)) => Ok(true),
-            Some(Err(err)) => Err(err),
-            None => Ok(false),
-        }
+        let token = self.iter.scan_one_err(|token| match token.token() {
+            Token::Keyword(x) if x == kw => true,
+            _ => false,
+        })?;
+        Ok(token.is_some())
+    }
+
+    fn scan_punc(&mut self, punc: Punctuator) -> Result<bool, LexError> {
+        let token = self.iter.scan_one_err(|token| match token.token() {
+            Token::Punctuator(x) if x == punc => true,
+            _ => false,
+        })?;
+        Ok(token.is_some())
     }
 
     fn read_primitive_type(&mut self) -> Result<Option<PrimitiveType>, ParseError> {
@@ -210,9 +212,12 @@ impl<'a> Parser<'a> {
         if self.iter.peek().is_none() {
             return Ok(None);
         }
-        let ty = self
+        let mut ty = self
             .read_type()?
             .unwrap_or(Type::Primitive(PrimitiveType::Int));
+        while self.scan_punc(Punctuator::Star)? {
+            ty = Type::Pointer(Box::new(ty));
+        }
         let token = match self.iter.peek() {
             Some(Ok(token)) => token,
             Some(Err(err)) => return Err(err.clone().into()),
@@ -310,6 +315,13 @@ mod tests {
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
                 Type::Primitive(PrimitiveType::UnsignedChar),
+            )),
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"signed long long int * abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::LongLong))),
             )),
         );
     }

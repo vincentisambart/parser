@@ -64,6 +64,42 @@ where
     }
 }
 
+pub trait ScanErr<T, E> {
+    fn scan_one_err<F>(&mut self, matcher: F) -> Result<Option<T>, E>
+    where
+        F: FnMut(&T) -> bool;
+}
+
+impl<I, T, E> ScanErr<T, E> for Peekable<I>
+where
+    I: Iterator<Item = Result<T, E>>,
+{
+    fn scan_one_err<F>(&mut self, mut matcher: F) -> Result<Option<T>, E>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        match self.peek() {
+            Some(Ok(x)) => if matcher(x) {
+                if let Some(Ok(x)) = self.next() {
+                    Ok(Some(x))
+                } else {
+                    unreachable!()
+                }
+            } else {
+                Ok(None)
+            },
+            Some(Err(_)) => {
+                if let Some(Err(err)) = self.next() {
+                    Err(err)
+                } else {
+                    unreachable!()
+                }
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 pub trait ScanPush {
     fn scan_push<F>(&mut self, matcher: F, string: &mut String)
     where
