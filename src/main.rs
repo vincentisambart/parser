@@ -126,6 +126,20 @@ impl<'a> Parser<'a> {
         Ok(token.is_some())
     }
 
+    fn scan_ident(&mut self) -> Result<Option<String>, LexError> {
+        let token = self.iter.scan_one_err(|token| match token.token() {
+            Token::Identifier(_) => true,
+            _ => false,
+        })?;
+        match token {
+            Some(token) => match token.token() {
+                Token::Identifier(ident) => Ok(Some(ident)),
+                _ => unreachable!(),
+            },
+            None => Ok(None),
+        }
+    }
+
     fn read_primitive_type(&mut self) -> Result<Option<PrimitiveType>, ParseError> {
         let ty = if self.scan_kw(Keyword::Void)? {
             Some(PrimitiveType::Void)
@@ -216,48 +230,40 @@ impl<'a> Parser<'a> {
             .read_type()?
             .unwrap_or(Type::Primitive(PrimitiveType::Int));
         while self.scan_punc(Punctuator::Star)? {
+            // TODO: Should be in read_type?
             ty = Type::Pointer(Box::new(ty));
         }
-        let token = match self.iter.peek() {
-            Some(Ok(token)) => token,
-            Some(Err(err)) => return Err(err.clone().into()),
-            None => {
-                return Err(ParseError::ExpectingToken(Token::Punctuator(
-                    Punctuator::Semicolon,
-                )))
-            }
-        };
-        let identifier = match token.token() {
-            Token::Identifier(_) => {
-                // TODO: Check if identifier not typedef
-                if let Token::Identifier(identifier) = self.iter.next().unwrap().unwrap().token() {
-                    identifier
-                } else {
-                    unreachable!()
+        if self.scan_punc(Punctuator::Semicolon)? {
+            return Ok(Some(ExternalDeclaration::Nothing));
+        }
+        let ident = if let Some(ident) = self.scan_ident()? {
+            ident
+        } else {
+            return match self.iter.next() {
+                Some(Ok(token)) => {
+                    Err(ParseError::UnexpectedToken(token.token(), token.position()))
                 }
-            }
-            Token::Punctuator(Punctuator::Semicolon) => {
-                self.iter.next();
-                return Ok(Some(ExternalDeclaration::Nothing));
-            }
-            _ => return Err(ParseError::UnexpectedToken(token.token(), token.position())),
+                Some(Err(err)) => Err(err.into()),
+                None => Err(ParseError::ExpectingToken(Token::Punctuator(
+                    Punctuator::Semicolon,
+                ))),
+            };
         };
 
-        let token = match self.iter.peek() {
-            Some(Ok(token)) => token,
-            Some(Err(err)) => return Err(err.clone().into()),
-            None => {
-                return Err(ParseError::ExpectingToken(Token::Punctuator(
-                    Punctuator::Semicolon,
-                )))
+        if self.scan_punc(Punctuator::Semicolon)? {
+            Ok(Some(ExternalDeclaration::Declaration(ident, ty)))
+        } else {
+            match self.iter.next() {
+                Some(Ok(token)) => {
+                    Err(ParseError::UnexpectedToken(token.token(), token.position()))
+                }
+                Some(Err(err)) => return Err(err.into()),
+                None => {
+                    return Err(ParseError::ExpectingToken(Token::Punctuator(
+                        Punctuator::Semicolon,
+                    )))
+                }
             }
-        };
-        match token.token() {
-            Token::Punctuator(Punctuator::Semicolon) => {
-                self.iter.next();
-                Ok(Some(ExternalDeclaration::Declaration(identifier, ty)))
-            }
-            _ => Err(ParseError::UnexpectedToken(token.token(), token.position())),
         }
     }
 }
