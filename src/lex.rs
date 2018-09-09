@@ -1,7 +1,5 @@
 // TODO:
 // - tests
-// - for punctuators, use a match
-// - move punctuators code to a different method
 // - maybe use Rc for strings in tokens
 // - maybe support universal character names
 // - maybe support other non-ascii identifiers (check what clang does)
@@ -625,6 +623,189 @@ impl<'a> TokenIter<'a> {
         Ok(())
     }
 
+    fn read_punctuator(&mut self) -> Result<Token, LexError> {
+        let token = match self.scanner.next().unwrap() {
+            '[' => Token::Punctuator(Punctuator::LeftSquareBracket),
+            ']' => Token::Punctuator(Punctuator::RightSquareBracket),
+            '(' => Token::Punctuator(Punctuator::LeftParenthesis),
+            ')' => Token::Punctuator(Punctuator::RightParenthesis),
+            '{' => Token::Punctuator(Punctuator::LeftCurlyBracket),
+            '}' => Token::Punctuator(Punctuator::RightCurlyBracket),
+            '-' => {
+                if self.scanner.scan_one(any_of!('-')).is_some() {
+                    Token::Punctuator(Punctuator::MinusMinus)
+                } else if self.scanner.scan_one(any_of!('>')).is_some() {
+                    Token::Punctuator(Punctuator::Arrow)
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::MinusEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Minus)
+                }
+            }
+            '+' => {
+                if self.scanner.scan_one(any_of!('+')).is_some() {
+                    Token::Punctuator(Punctuator::PlusPlus)
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::PlusEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Plus)
+                }
+            }
+            '&' => {
+                if self.scanner.scan_one(any_of!('&')).is_some() {
+                    Token::Punctuator(Punctuator::AmpersandAmpersand)
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::AmpersandEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Ampersand)
+                }
+            }
+            '|' => {
+                if self.scanner.scan_one(any_of!('|')).is_some() {
+                    Token::Punctuator(Punctuator::PipePipe)
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::PipeEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Pipe)
+                }
+            }
+            '<' => {
+                if self.scanner.scan_one(any_of!('<')).is_some() {
+                    if self.scanner.scan_one(any_of!('=')).is_some() {
+                        Token::Punctuator(Punctuator::LessLessEqual)
+                    } else {
+                        Token::Punctuator(Punctuator::LessLess)
+                    }
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::LessEqual)
+                } else if self.scanner.scan_one(any_of!(':')).is_some() {
+                    // digraph
+                    Token::Punctuator(Punctuator::LeftSquareBracket)
+                } else if self.scanner.scan_one(any_of!('%')).is_some() {
+                    // digraph
+                    Token::Punctuator(Punctuator::LeftCurlyBracket)
+                } else {
+                    Token::Punctuator(Punctuator::Less)
+                }
+            }
+            '>' => {
+                if self.scanner.scan_one(any_of!('>')).is_some() {
+                    if self.scanner.scan_one(any_of!('=')).is_some() {
+                        Token::Punctuator(Punctuator::GreaterGreaterEqual)
+                    } else {
+                        Token::Punctuator(Punctuator::GreaterGreater)
+                    }
+                } else if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::GreaterEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Greater)
+                }
+            }
+            '.' => {
+                if self.scanner.scan_one(any_of!('.')).is_some() {
+                    if self.scanner.scan_one(any_of!('.')).is_some() {
+                        Token::Punctuator(Punctuator::Ellipsis)
+                    } else {
+                        self.next_token_to_return = Some(Token::Punctuator(Punctuator::Period));
+                        Token::Punctuator(Punctuator::Period)
+                    }
+                } else {
+                    Token::Punctuator(Punctuator::Period)
+                }
+            }
+            '*' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::StarEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Star)
+                }
+            }
+            '~' => Token::Punctuator(Punctuator::Tilde),
+            '!' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::ExclamationEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Exclamation)
+                }
+            }
+            '/' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::SlashEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Slash)
+                }
+            }
+            '%' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::PercentEqual)
+                } else if self.scanner.scan_one(any_of!('>')).is_some() {
+                    // digraph
+                    Token::Punctuator(Punctuator::RightCurlyBracket)
+                } else if self.scanner.scan_one(any_of!(':')).is_some() {
+                    // digraph
+                    if self.scanner.scan_one(any_of!('%')).is_some() {
+                        if self.scanner.scan_one(any_of!(':')).is_some() {
+                            Token::Punctuator(Punctuator::HashHash)
+                        } else {
+                            if self.scanner.scan_one(any_of!('=')).is_some() {
+                                self.next_token_to_return =
+                                    Some(Token::Punctuator(Punctuator::PercentEqual));
+                            } else if self.scanner.scan_one(any_of!('>')).is_some() {
+                                // digraph
+                                self.next_token_to_return =
+                                    Some(Token::Punctuator(Punctuator::RightCurlyBracket));
+                            } else {
+                                self.next_token_to_return =
+                                    Some(Token::Punctuator(Punctuator::Percent));
+                            }
+                            Token::Punctuator(Punctuator::Hash)
+                        }
+                    } else {
+                        Token::Punctuator(Punctuator::Hash)
+                    }
+                } else {
+                    Token::Punctuator(Punctuator::Percent)
+                }
+            }
+            '^' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::CaretEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Caret)
+                }
+            }
+            ':' => {
+                if self.scanner.scan_one(any_of!('>')).is_some() {
+                    // digraph
+                    Token::Punctuator(Punctuator::RightSquareBracket)
+                } else {
+                    Token::Punctuator(Punctuator::Colon)
+                }
+            }
+            '=' => {
+                if self.scanner.scan_one(any_of!('=')).is_some() {
+                    Token::Punctuator(Punctuator::EqualEqual)
+                } else {
+                    Token::Punctuator(Punctuator::Equal)
+                }
+            }
+            '#' => {
+                if self.scanner.scan_one(any_of!('#')).is_some() {
+                    Token::Punctuator(Punctuator::HashHash)
+                } else {
+                    Token::Punctuator(Punctuator::Hash)
+                }
+            }
+            '?' => Token::Punctuator(Punctuator::Question),
+            ';' => Token::Punctuator(Punctuator::Semicolon),
+            ',' => Token::Punctuator(Punctuator::Comma),
+            // Objective-C
+            '@' => Token::Punctuator(Punctuator::At),
+            c => return Err(LexError::UnexpectedChar(c, self.position.clone())),
+        };
+        Ok(token)
+    }
+
     // Should only be called when we're sure there's a next token (or an error)
     fn next_token(&mut self) -> Result<Token, LexError> {
         let token = if self.scanner.check_one(char::is_ascii_digit).is_some() {
@@ -672,183 +853,8 @@ impl<'a> TokenIter<'a> {
                     _ => Token::Identifier(identifier),
                 }
             }
-        } else if self.scanner.scan_one(any_of!('[')).is_some() {
-            Token::Punctuator(Punctuator::LeftSquareBracket)
-        } else if self.scanner.scan_one(any_of!(']')).is_some() {
-            Token::Punctuator(Punctuator::RightSquareBracket)
-        } else if self.scanner.scan_one(any_of!('(')).is_some() {
-            Token::Punctuator(Punctuator::LeftParenthesis)
-        } else if self.scanner.scan_one(any_of!(')')).is_some() {
-            Token::Punctuator(Punctuator::RightParenthesis)
-        } else if self.scanner.scan_one(any_of!('{')).is_some() {
-            Token::Punctuator(Punctuator::LeftCurlyBracket)
-        } else if self.scanner.scan_one(any_of!('}')).is_some() {
-            Token::Punctuator(Punctuator::RightCurlyBracket)
-        } else if self.scanner.scan_one(any_of!('-')).is_some() {
-            if self.scanner.scan_one(any_of!('-')).is_some() {
-                Token::Punctuator(Punctuator::MinusMinus)
-            } else if self.scanner.scan_one(any_of!('>')).is_some() {
-                Token::Punctuator(Punctuator::Arrow)
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::MinusEqual)
-            } else {
-                Token::Punctuator(Punctuator::Minus)
-            }
-        } else if self.scanner.scan_one(any_of!('+')).is_some() {
-            if self.scanner.scan_one(any_of!('+')).is_some() {
-                Token::Punctuator(Punctuator::PlusPlus)
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::PlusEqual)
-            } else {
-                Token::Punctuator(Punctuator::Plus)
-            }
-        } else if self.scanner.scan_one(any_of!('&')).is_some() {
-            if self.scanner.scan_one(any_of!('&')).is_some() {
-                Token::Punctuator(Punctuator::AmpersandAmpersand)
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::AmpersandEqual)
-            } else {
-                Token::Punctuator(Punctuator::Ampersand)
-            }
-        } else if self.scanner.scan_one(any_of!('|')).is_some() {
-            if self.scanner.scan_one(any_of!('|')).is_some() {
-                Token::Punctuator(Punctuator::PipePipe)
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::PipeEqual)
-            } else {
-                Token::Punctuator(Punctuator::Pipe)
-            }
-        } else if self.scanner.scan_one(any_of!('<')).is_some() {
-            if self.scanner.scan_one(any_of!('<')).is_some() {
-                if self.scanner.scan_one(any_of!('=')).is_some() {
-                    Token::Punctuator(Punctuator::LessLessEqual)
-                } else {
-                    Token::Punctuator(Punctuator::LessLess)
-                }
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::LessEqual)
-            } else if self.scanner.scan_one(any_of!(':')).is_some() {
-                // digraph
-                Token::Punctuator(Punctuator::LeftSquareBracket)
-            } else if self.scanner.scan_one(any_of!('%')).is_some() {
-                // digraph
-                Token::Punctuator(Punctuator::LeftCurlyBracket)
-            } else {
-                Token::Punctuator(Punctuator::Less)
-            }
-        } else if self.scanner.scan_one(any_of!('>')).is_some() {
-            if self.scanner.scan_one(any_of!('>')).is_some() {
-                if self.scanner.scan_one(any_of!('=')).is_some() {
-                    Token::Punctuator(Punctuator::GreaterGreaterEqual)
-                } else {
-                    Token::Punctuator(Punctuator::GreaterGreater)
-                }
-            } else if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::GreaterEqual)
-            } else {
-                Token::Punctuator(Punctuator::Greater)
-            }
-        } else if self.scanner.scan_one(any_of!('.')).is_some() {
-            if self.scanner.scan_one(any_of!('.')).is_some() {
-                if self.scanner.scan_one(any_of!('.')).is_some() {
-                    Token::Punctuator(Punctuator::Ellipsis)
-                } else {
-                    self.next_token_to_return = Some(Token::Punctuator(Punctuator::Period));
-                    Token::Punctuator(Punctuator::Period)
-                }
-            } else {
-                Token::Punctuator(Punctuator::Period)
-            }
-        } else if self.scanner.scan_one(any_of!('*')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::StarEqual)
-            } else {
-                Token::Punctuator(Punctuator::Star)
-            }
-        } else if self.scanner.scan_one(any_of!('~')).is_some() {
-            Token::Punctuator(Punctuator::Tilde)
-        } else if self.scanner.scan_one(any_of!('!')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::ExclamationEqual)
-            } else {
-                Token::Punctuator(Punctuator::Exclamation)
-            }
-        } else if self.scanner.scan_one(any_of!('/')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::SlashEqual)
-            } else {
-                Token::Punctuator(Punctuator::Slash)
-            }
-        } else if self.scanner.scan_one(any_of!('%')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::PercentEqual)
-            } else if self.scanner.scan_one(any_of!('>')).is_some() {
-                // digraph
-                Token::Punctuator(Punctuator::RightCurlyBracket)
-            } else if self.scanner.scan_one(any_of!(':')).is_some() {
-                // digraph
-                if self.scanner.scan_one(any_of!('%')).is_some() {
-                    if self.scanner.scan_one(any_of!(':')).is_some() {
-                        Token::Punctuator(Punctuator::HashHash)
-                    } else {
-                        if self.scanner.scan_one(any_of!('=')).is_some() {
-                            self.next_token_to_return =
-                                Some(Token::Punctuator(Punctuator::PercentEqual));
-                        } else if self.scanner.scan_one(any_of!('>')).is_some() {
-                            // digraph
-                            self.next_token_to_return =
-                                Some(Token::Punctuator(Punctuator::RightCurlyBracket));
-                        } else {
-                            self.next_token_to_return =
-                                Some(Token::Punctuator(Punctuator::Percent));
-                        }
-                        Token::Punctuator(Punctuator::Hash)
-                    }
-                } else {
-                    Token::Punctuator(Punctuator::Hash)
-                }
-            } else {
-                Token::Punctuator(Punctuator::Percent)
-            }
-        } else if self.scanner.scan_one(any_of!('^')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::CaretEqual)
-            } else {
-                Token::Punctuator(Punctuator::Caret)
-            }
-        } else if self.scanner.scan_one(any_of!(':')).is_some() {
-            if self.scanner.scan_one(any_of!('>')).is_some() {
-                // digraph
-                Token::Punctuator(Punctuator::RightSquareBracket)
-            } else {
-                Token::Punctuator(Punctuator::Colon)
-            }
-        } else if self.scanner.scan_one(any_of!('=')).is_some() {
-            if self.scanner.scan_one(any_of!('=')).is_some() {
-                Token::Punctuator(Punctuator::EqualEqual)
-            } else {
-                Token::Punctuator(Punctuator::Equal)
-            }
-        } else if self.scanner.scan_one(any_of!('#')).is_some() {
-            if self.scanner.scan_one(any_of!('#')).is_some() {
-                Token::Punctuator(Punctuator::HashHash)
-            } else {
-                Token::Punctuator(Punctuator::Hash)
-            }
-        } else if self.scanner.scan_one(any_of!('?')).is_some() {
-            Token::Punctuator(Punctuator::Question)
-        } else if self.scanner.scan_one(any_of!(';')).is_some() {
-            Token::Punctuator(Punctuator::Semicolon)
-        } else if self.scanner.scan_one(any_of!(',')).is_some() {
-            Token::Punctuator(Punctuator::Comma)
-        } else if self.scanner.scan_one(any_of!('@')).is_some() {
-            // Objective-C
-            Token::Punctuator(Punctuator::At)
         } else {
-            return Err(LexError::UnexpectedChar(
-                *self.scanner.next().unwrap(),
-                self.position.clone(),
-            ));
+            self.read_punctuator()?
         };
         Ok(token)
     }
