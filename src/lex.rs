@@ -860,6 +860,12 @@ impl<'a> TokenIter<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndKind {
+    EndOfLine,
+    EndOfFile,
+}
+
 impl<'a> Iterator for TokenIter<'a> {
     type Item = Result<PositionedToken, LexError>;
 
@@ -873,17 +879,16 @@ impl<'a> Iterator for TokenIter<'a> {
         let token = loop {
             self.scanner.skip_matching(any_of!(' ', '\t'));
 
-            let mut is_end_of_line = false;
-            let mut is_end_of_file = false;
+            let mut end: Option<EndKind> = None;
             if self.scanner.peek().is_none() {
-                is_end_of_file = true;
+                end = Some(EndKind::EndOfFile);
             } else if self.scanner.scan_one(any_of!('\n')).is_some() {
-                is_end_of_line = true;
+                end = Some(EndKind::EndOfLine);
             } else if self.scanner.scan_one(any_of!('\r')).is_some() {
                 self.scanner.scan_one(any_of!('\n'));
-                is_end_of_line = true;
+                end = Some(EndKind::EndOfLine);
             };
-            if is_end_of_line || is_end_of_file {
+            if let Some(end) = end {
                 if let Some(ref mut directive) = preprocessing_directive {
                     if let Err(err) = self.handle_preprocessing_directive(directive.as_ref()) {
                         break Some(Err(err));
@@ -892,7 +897,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 } else {
                     self.position.line += 1;
                 }
-                if is_end_of_file {
+                if end == EndKind::EndOfFile {
                     break None;
                 }
                 self.is_start_of_line = true;
