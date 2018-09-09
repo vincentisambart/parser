@@ -3,11 +3,35 @@
 mod lex;
 mod scan;
 use crate::lex::{Keyword, LexError, Position, Punctuator, Token, TokenIter};
+use crate::scan::Scan;
 use std::iter::Peekable;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PrimitiveType {
+    Void,
+    Char,
+    SignedChar,
+    UnsignedChar,
+    Short,
+    UnsignedShort,
+    Int,
+    UnsignedInt,
+    Long,
+    UnsignedLong,
+    LongLong,
+    UnsignedLongLong,
+    Float,
+    Double,
+    LongDouble,
+    Bool,
+    FloatComplex,
+    DoubleComplex,
+    LongDoubleComplex,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
-    Int,
+    Primitive(PrimitiveType),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,12 +83,17 @@ impl<'a> Parser<'a> {
         false // TODO
     }
 
-    fn read_type(&mut self) -> Result<Option<Type>, LexError> {
-        // read_type should not be called when no next token is available
+    fn read_type(&mut self) -> Result<Option<Type>, ParseError> {
+        if let Some(prim) = self.read_primitive_type()? {
+            return Ok(Some(Type::Primitive(prim)));
+        }
         let token = match self.iter.peek() {
             Some(Ok(token)) => token,
-            Some(Err(err)) => return Err(err.clone()),
-            None => panic!("read_type should not be called when no next token is available"),
+            Some(Err(_)) => {
+                let err = self.iter.next().unwrap().err().unwrap().into();
+                return Err(err);
+            }
+            None => return Ok(None),
         };
         match token.token() {
             Token::Identifier(identifier) => if self.is_type_name(identifier.as_ref()) {
@@ -74,10 +103,105 @@ impl<'a> Parser<'a> {
             },
             Token::Keyword(Keyword::Int) => {
                 self.iter.next();
-                Ok(Some(Type::Int))
+                Ok(Some(Type::Primitive(PrimitiveType::Int)))
             }
             _ => Ok(None),
         }
+    }
+
+    fn scan_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
+        let token = self.iter.scan_one(|res| match res {
+            Ok(token) => match token.token() {
+                Token::Keyword(x) if x == kw => true,
+                _ => false,
+            },
+            Err(_) => true,
+        });
+        match token {
+            Some(Ok(_)) => Ok(true),
+            Some(Err(err)) => Err(err),
+            None => Ok(false),
+        }
+    }
+
+    fn read_primitive_type(&mut self) -> Result<Option<PrimitiveType>, ParseError> {
+        let ty = if self.scan_kw(Keyword::Void)? {
+            Some(PrimitiveType::Void)
+        } else if self.scan_kw(Keyword::Char)? {
+            Some(PrimitiveType::Char)
+        } else if self.scan_kw(Keyword::Signed)? {
+            if self.scan_kw(Keyword::Char)? {
+                Some(PrimitiveType::SignedChar)
+            } else if self.scan_kw(Keyword::Short)? {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::Short)
+            } else if self.scan_kw(Keyword::Long)? {
+                if self.scan_kw(Keyword::Long)? {
+                    self.scan_kw(Keyword::Int)?;
+                    Some(PrimitiveType::LongLong)
+                } else {
+                    self.scan_kw(Keyword::Int)?;
+                    Some(PrimitiveType::Long)
+                }
+            } else {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::Int)
+            }
+        } else if self.scan_kw(Keyword::Unsigned)? {
+            if self.scan_kw(Keyword::Char)? {
+                Some(PrimitiveType::UnsignedChar)
+            } else if self.scan_kw(Keyword::Short)? {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::UnsignedShort)
+            } else if self.scan_kw(Keyword::Long)? {
+                if self.scan_kw(Keyword::Long)? {
+                    self.scan_kw(Keyword::Int)?;
+                    Some(PrimitiveType::UnsignedLongLong)
+                } else {
+                    self.scan_kw(Keyword::Int)?;
+                    Some(PrimitiveType::UnsignedLong)
+                }
+            } else {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::UnsignedInt)
+            }
+        } else if self.scan_kw(Keyword::Short)? {
+            self.scan_kw(Keyword::Int)?;
+            Some(PrimitiveType::Short)
+        } else if self.scan_kw(Keyword::Int)? {
+            Some(PrimitiveType::Int)
+        } else if self.scan_kw(Keyword::Long)? {
+            if self.scan_kw(Keyword::Long)? {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::LongLong)
+            } else if self.scan_kw(Keyword::Double)? {
+                if self.scan_kw(Keyword::Complex)? {
+                    Some(PrimitiveType::LongDoubleComplex)
+                } else {
+                    Some(PrimitiveType::LongDouble)
+                }
+            } else {
+                self.scan_kw(Keyword::Int)?;
+                Some(PrimitiveType::Long)
+            }
+        } else if self.scan_kw(Keyword::Float)? {
+            if self.scan_kw(Keyword::Complex)? {
+                Some(PrimitiveType::FloatComplex)
+            } else {
+                Some(PrimitiveType::Float)
+            }
+        } else if self.scan_kw(Keyword::Double)? {
+            if self.scan_kw(Keyword::Complex)? {
+                Some(PrimitiveType::DoubleComplex)
+            } else {
+                Some(PrimitiveType::Double)
+            }
+        } else if self.scan_kw(Keyword::Bool)? {
+            Some(PrimitiveType::Bool)
+        } else {
+            None
+        };
+        Ok(ty)
     }
 
     fn read_next_external_declaration(
@@ -86,7 +210,9 @@ impl<'a> Parser<'a> {
         if self.iter.peek().is_none() {
             return Ok(None);
         }
-        let ty = self.read_type()?.unwrap_or(Type::Int);
+        let ty = self
+            .read_type()?
+            .unwrap_or(Type::Primitive(PrimitiveType::Int));
         let token = match self.iter.peek() {
             Some(Ok(token)) => token,
             Some(Err(err)) => return Err(err.clone().into()),
@@ -162,14 +288,28 @@ mod tests {
             parse_one_external_declaration(r#"abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Int,
+                Type::Primitive(PrimitiveType::Int),
             )),
         );
+        // assert_eq!(
+        //     parse_one_external_declaration(r#"(abcd);"#),
+        //     Some(ExternalDeclaration::Declaration(
+        //         "abcd".to_string(),
+        //         Type::Primitive(PrimitiveType::Int),
+        //     )),
+        // );
         assert_eq!(
             parse_one_external_declaration(r#"int abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Int,
+                Type::Primitive(PrimitiveType::Int),
+            )),
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"unsigned char abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Primitive(PrimitiveType::UnsignedChar),
             )),
         );
     }
