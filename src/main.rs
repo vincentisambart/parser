@@ -4,7 +4,9 @@ mod lex;
 mod scan;
 use crate::lex::{Keyword, LexError, Position, Punctuator, Token, TokenIter};
 use crate::scan::{Scan, ScanErr};
+use std::collections::HashMap;
 use std::iter::Peekable;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PrimitiveType {
@@ -33,6 +35,7 @@ enum PrimitiveType {
 enum Type {
     Primitive(PrimitiveType),
     Pointer(Box<Type>),
+    Custom(String, Rc<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,10 +60,6 @@ enum ExternalDeclaration {
     Nothing,
 }
 
-struct Parser<'a> {
-    iter: Peekable<TokenIter<'a>>,
-}
-
 #[derive(Debug, Clone)]
 pub enum ParseError {
     LexError(LexError),
@@ -74,14 +73,31 @@ impl From<LexError> for ParseError {
     }
 }
 
+struct Parser<'a> {
+    iter: Peekable<TokenIter<'a>>,
+    types_stack: Vec<HashMap<String, Rc<Type>>>,
+}
+
 impl<'a> Parser<'a> {
     fn from(code: &'a str) -> Parser<'a> {
         let iter = TokenIter::from(code).peekable();
-        Parser { iter }
+        Parser {
+            iter,
+            types_stack: Vec::new(),
+        }
     }
 
-    fn is_type_name(&self, _name: &str) -> bool {
-        false // TODO
+    fn type_by_name(&self, name: &str) -> Option<Rc<Type>> {
+        for types in self.types_stack.iter().rev() {
+            if let Some(ty) = types.get(name) {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    fn is_type_name(&self, name: &str) -> bool {
+        self.type_by_name(name).is_some()
     }
 
     fn read_type(&mut self) -> Result<Option<Type>, ParseError> {
