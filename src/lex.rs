@@ -846,7 +846,7 @@ impl<'a> TokenIter<'a> {
             Token::Punctuator(Punctuator::At)
         } else {
             return Err(LexError::UnexpectedChar(
-                *self.scanner.peek().unwrap(),
+                *self.scanner.next().unwrap(),
                 self.position.clone(),
             ));
         };
@@ -918,15 +918,8 @@ impl<'a> Iterator for TokenIter<'a> {
                 break Some(Ok(PositionedToken::new(token, self.position.clone())));
             }
         };
-        match token {
-            Some(Err(_)) => {
-                // If an error occurs, go to the end of the file so you don't risk looping endlessly.
-                while let Some(_) = self.next() {}
-            }
-            Some(Ok(ref valid_token)) => {
-                self.previous_token = Some(valid_token.token.clone());
-            }
-            None => (),
+        if let Some(Ok(ref valid_token)) = token {
+            self.previous_token = Some(valid_token.token.clone());
         }
         token
     }
