@@ -5,6 +5,10 @@ pub trait Peeking<I: Iterator> {
     where
         F: FnMut(&I::Item) -> bool;
 
+    fn advance_if<F>(&mut self, predicate: F) -> bool
+    where
+        F: FnMut(&I::Item) -> bool;
+
     fn advance_while<F>(&mut self, predicate: F)
     where
         F: FnMut(&I::Item) -> bool;
@@ -40,6 +44,13 @@ where
             },
             None => None,
         }
+    }
+
+    fn advance_if<F>(&mut self, predicate: F) -> bool
+    where
+        F: FnMut(&I::Item) -> bool,
+    {
+        self.next_if(predicate).is_some()
     }
 
     fn advance_while<F>(&mut self, mut predicate: F)

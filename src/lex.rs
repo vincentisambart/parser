@@ -372,13 +372,13 @@ impl<'a> TokenIter<'a> {
     fn read_number_literal(&mut self) -> Result<Token, LexError> {
         let mut token = String::new();
 
-        if self.scanner.next_if(any_of!('0')).is_some() {
-            if self.scanner.next_if(any_of!('x', 'X')).is_some() {
+        if self.scanner.advance_if(any_of!('0')) {
+            if self.scanner.advance_if(any_of!('x', 'X')) {
                 // hexadecimal
                 self.scanner.push_while(&mut token, char::is_ascii_hexdigit);
                 assert!(!token.is_empty());
                 let mut is_float = false;
-                if self.scanner.next_if(any_of!('.')).is_some() {
+                if self.scanner.advance_if(any_of!('.')) {
                     is_float = true;
                     token.push('.');
                     self.scanner.push_while(&mut token, char::is_ascii_hexdigit);
@@ -415,7 +415,7 @@ impl<'a> TokenIter<'a> {
 
         self.scanner.push_while(&mut token, char::is_ascii_digit);
         let mut is_float = false;
-        if self.scanner.next_if(any_of!('.')).is_some() {
+        if self.scanner.advance_if(any_of!('.')) {
             is_float = true;
             token.push('.');
             self.scanner.push_while(&mut token, char::is_ascii_digit);
@@ -445,15 +445,15 @@ impl<'a> TokenIter<'a> {
     }
 
     fn read_integer_suffix(&mut self) -> Option<IntegerSuffix> {
-        if self.scanner.next_if(any_of!('l', 'L')).is_some() {
-            if self.scanner.next_if(any_of!('l', 'L')).is_some() {
+        if self.scanner.advance_if(any_of!('l', 'L')) {
+            if self.scanner.advance_if(any_of!('l', 'L')) {
                 Some(IntegerSuffix::LongLong)
             } else {
                 Some(IntegerSuffix::Long)
             }
-        } else if self.scanner.next_if(any_of!('u', 'U')).is_some() {
-            if self.scanner.next_if(any_of!('l', 'L')).is_some() {
-                if self.scanner.next_if(any_of!('l', 'L')).is_some() {
+        } else if self.scanner.advance_if(any_of!('u', 'U')) {
+            if self.scanner.advance_if(any_of!('l', 'L')) {
+                if self.scanner.advance_if(any_of!('l', 'L')) {
                     Some(IntegerSuffix::UnsignedLongLong)
                 } else {
                     Some(IntegerSuffix::UnsignedLong)
@@ -467,9 +467,9 @@ impl<'a> TokenIter<'a> {
     }
 
     fn read_float_suffix(&mut self) -> Option<FloatSuffix> {
-        if self.scanner.next_if(any_of!('f', 'F')).is_some() {
+        if self.scanner.advance_if(any_of!('f', 'F')) {
             Some(FloatSuffix::Float)
-        } else if self.scanner.next_if(any_of!('l', 'L')).is_some() {
+        } else if self.scanner.advance_if(any_of!('l', 'L')) {
             Some(FloatSuffix::LongDouble)
         } else {
             None
@@ -527,7 +527,7 @@ impl<'a> TokenIter<'a> {
 
     fn read_char_literal(&mut self, prefix: Option<CharPrefix>) -> Result<Token, LexError> {
         self.scanner.next_if(any_of!('\'')).unwrap();
-        let t = if self.scanner.next_if(any_of!('\\')).is_some() {
+        let t = if self.scanner.advance_if(any_of!('\\')) {
             let c = self.read_char_escape()?;
             Token::CharLiteral(c, prefix)
         } else if let Some(c) = self.scanner.next() {
@@ -554,9 +554,9 @@ impl<'a> TokenIter<'a> {
         let mut string = String::new();
 
         loop {
-            if self.scanner.next_if(any_of!('"')).is_some() {
+            if self.scanner.advance_if(any_of!('"')) {
                 break;
-            } else if self.scanner.next_if(any_of!('\\')).is_some() {
+            } else if self.scanner.advance_if(any_of!('\\')) {
                 let c = self.read_char_escape()?;
                 string.push(c);
             } else if let Some(c) = self.scanner.next() {
@@ -632,56 +632,56 @@ impl<'a> TokenIter<'a> {
             '{' => Token::Punctuator(Punctuator::LeftCurlyBracket),
             '}' => Token::Punctuator(Punctuator::RightCurlyBracket),
             '-' => {
-                if self.scanner.next_if(any_of!('-')).is_some() {
+                if self.scanner.advance_if(any_of!('-')) {
                     Token::Punctuator(Punctuator::MinusMinus)
-                } else if self.scanner.next_if(any_of!('>')).is_some() {
+                } else if self.scanner.advance_if(any_of!('>')) {
                     Token::Punctuator(Punctuator::Arrow)
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::MinusEqual)
                 } else {
                     Token::Punctuator(Punctuator::Minus)
                 }
             }
             '+' => {
-                if self.scanner.next_if(any_of!('+')).is_some() {
+                if self.scanner.advance_if(any_of!('+')) {
                     Token::Punctuator(Punctuator::PlusPlus)
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::PlusEqual)
                 } else {
                     Token::Punctuator(Punctuator::Plus)
                 }
             }
             '&' => {
-                if self.scanner.next_if(any_of!('&')).is_some() {
+                if self.scanner.advance_if(any_of!('&')) {
                     Token::Punctuator(Punctuator::AmpersandAmpersand)
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::AmpersandEqual)
                 } else {
                     Token::Punctuator(Punctuator::Ampersand)
                 }
             }
             '|' => {
-                if self.scanner.next_if(any_of!('|')).is_some() {
+                if self.scanner.advance_if(any_of!('|')) {
                     Token::Punctuator(Punctuator::PipePipe)
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::PipeEqual)
                 } else {
                     Token::Punctuator(Punctuator::Pipe)
                 }
             }
             '<' => {
-                if self.scanner.next_if(any_of!('<')).is_some() {
-                    if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('<')) {
+                    if self.scanner.advance_if(any_of!('=')) {
                         Token::Punctuator(Punctuator::LessLessEqual)
                     } else {
                         Token::Punctuator(Punctuator::LessLess)
                     }
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::LessEqual)
-                } else if self.scanner.next_if(any_of!(':')).is_some() {
+                } else if self.scanner.advance_if(any_of!(':')) {
                     // digraph
                     Token::Punctuator(Punctuator::LeftSquareBracket)
-                } else if self.scanner.next_if(any_of!('%')).is_some() {
+                } else if self.scanner.advance_if(any_of!('%')) {
                     // digraph
                     Token::Punctuator(Punctuator::LeftCurlyBracket)
                 } else {
@@ -689,21 +689,21 @@ impl<'a> TokenIter<'a> {
                 }
             }
             '>' => {
-                if self.scanner.next_if(any_of!('>')).is_some() {
-                    if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('>')) {
+                    if self.scanner.advance_if(any_of!('=')) {
                         Token::Punctuator(Punctuator::GreaterGreaterEqual)
                     } else {
                         Token::Punctuator(Punctuator::GreaterGreater)
                     }
-                } else if self.scanner.next_if(any_of!('=')).is_some() {
+                } else if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::GreaterEqual)
                 } else {
                     Token::Punctuator(Punctuator::Greater)
                 }
             }
             '.' => {
-                if self.scanner.next_if(any_of!('.')).is_some() {
-                    if self.scanner.next_if(any_of!('.')).is_some() {
+                if self.scanner.advance_if(any_of!('.')) {
+                    if self.scanner.advance_if(any_of!('.')) {
                         Token::Punctuator(Punctuator::Ellipsis)
                     } else {
                         self.next_token_to_return = Some(Token::Punctuator(Punctuator::Period));
@@ -714,7 +714,7 @@ impl<'a> TokenIter<'a> {
                 }
             }
             '*' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::StarEqual)
                 } else {
                     Token::Punctuator(Punctuator::Star)
@@ -722,35 +722,35 @@ impl<'a> TokenIter<'a> {
             }
             '~' => Token::Punctuator(Punctuator::Tilde),
             '!' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::ExclamationEqual)
                 } else {
                     Token::Punctuator(Punctuator::Exclamation)
                 }
             }
             '/' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::SlashEqual)
                 } else {
                     Token::Punctuator(Punctuator::Slash)
                 }
             }
             '%' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::PercentEqual)
-                } else if self.scanner.next_if(any_of!('>')).is_some() {
+                } else if self.scanner.advance_if(any_of!('>')) {
                     // digraph
                     Token::Punctuator(Punctuator::RightCurlyBracket)
-                } else if self.scanner.next_if(any_of!(':')).is_some() {
+                } else if self.scanner.advance_if(any_of!(':')) {
                     // digraph
-                    if self.scanner.next_if(any_of!('%')).is_some() {
-                        if self.scanner.next_if(any_of!(':')).is_some() {
+                    if self.scanner.advance_if(any_of!('%')) {
+                        if self.scanner.advance_if(any_of!(':')) {
                             Token::Punctuator(Punctuator::HashHash)
                         } else {
-                            if self.scanner.next_if(any_of!('=')).is_some() {
+                            if self.scanner.advance_if(any_of!('=')) {
                                 self.next_token_to_return =
                                     Some(Token::Punctuator(Punctuator::PercentEqual));
-                            } else if self.scanner.next_if(any_of!('>')).is_some() {
+                            } else if self.scanner.advance_if(any_of!('>')) {
                                 // digraph
                                 self.next_token_to_return =
                                     Some(Token::Punctuator(Punctuator::RightCurlyBracket));
@@ -768,14 +768,14 @@ impl<'a> TokenIter<'a> {
                 }
             }
             '^' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::CaretEqual)
                 } else {
                     Token::Punctuator(Punctuator::Caret)
                 }
             }
             ':' => {
-                if self.scanner.next_if(any_of!('>')).is_some() {
+                if self.scanner.advance_if(any_of!('>')) {
                     // digraph
                     Token::Punctuator(Punctuator::RightSquareBracket)
                 } else {
@@ -783,14 +783,14 @@ impl<'a> TokenIter<'a> {
                 }
             }
             '=' => {
-                if self.scanner.next_if(any_of!('=')).is_some() {
+                if self.scanner.advance_if(any_of!('=')) {
                     Token::Punctuator(Punctuator::EqualEqual)
                 } else {
                     Token::Punctuator(Punctuator::Equal)
                 }
             }
             '#' => {
-                if self.scanner.next_if(any_of!('#')).is_some() {
+                if self.scanner.advance_if(any_of!('#')) {
                     Token::Punctuator(Punctuator::HashHash)
                 } else {
                     Token::Punctuator(Punctuator::Hash)
@@ -882,10 +882,10 @@ impl<'a> Iterator for TokenIter<'a> {
             let mut end: Option<EndKind> = None;
             if self.scanner.peek().is_none() {
                 end = Some(EndKind::EndOfFile);
-            } else if self.scanner.next_if(any_of!('\n')).is_some() {
+            } else if self.scanner.advance_if(any_of!('\n')) {
                 end = Some(EndKind::EndOfLine);
-            } else if self.scanner.next_if(any_of!('\r')).is_some() {
-                self.scanner.next_if(any_of!('\n'));
+            } else if self.scanner.advance_if(any_of!('\r')) {
+                self.scanner.advance_if(any_of!('\n'));
                 end = Some(EndKind::EndOfLine);
             };
             if let Some(end) = end {
