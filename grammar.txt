@@ -179,7 +179,7 @@
 6.7.6 direct-declarator:
   | identifier
   | "(" declarator ")"
-  | direct-declarator "[" type-qualifier-list? assignment-expression? ]
+  | direct-declarator "[" type-qualifier-list? assignment-expression? "]"
   | direct-declarator "[" "static" type-qualifier-list? assignment-expression "]"
   | direct-declarator "[" type-qualifier-list "static" assignment-expression "]"
   | direct-declarator "[" type-qualifier-list? "*" "]"

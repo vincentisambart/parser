@@ -2,6 +2,7 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 mod lex;
 mod scan;
+use bitflags::bitflags;
 use crate::lex::{Keyword, LexError, Position, PositionedToken, Punctuator, Token, TokenIter};
 use crate::scan::Peeking;
 use std::collections::HashMap;
@@ -72,11 +73,21 @@ enum PrimitiveType {
     LongDoubleComplex,
 }
 
+bitflags! {
+    struct TypeQualifiers: u8 {
+        const CONST    = 1 << 0;
+        const VOLATILE = 1 << 1;
+        const RESTRICT = 1 << 2;
+        const ATOMIC   = 1 << 3;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
     Primitive(PrimitiveType),
     Pointer(Box<Type>),
-    Custom(String, Rc<Type>),
+    Qualified(TypeQualifiers, Box<Type>),
+    UserDefined(String, Rc<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +152,21 @@ impl<'a> Parser<'a> {
         self.type_by_name(name).is_some()
     }
 
-    fn read_type(&mut self) -> Result<Option<Type>, ParseError> {
+    fn read_type_qualifier(&mut self) -> Result<Option<TypeQualifiers>, ParseError> {
+        if self.iter.advance_if_kw(Keyword::Const)? {
+            Ok(Some(TypeQualifiers::CONST))
+        } else if self.iter.advance_if_kw(Keyword::Volatile)? {
+            Ok(Some(TypeQualifiers::VOLATILE))
+        } else if self.iter.advance_if_kw(Keyword::Restrict)? {
+            Ok(Some(TypeQualifiers::RESTRICT))
+        } else if self.iter.advance_if_kw(Keyword::Atomic)? {
+            Ok(Some(TypeQualifiers::ATOMIC))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn read_base_type(&mut self) -> Result<Option<Type>, ParseError> {
         if let Some(prim) = self.read_primitive_type()? {
             return Ok(Some(Type::Primitive(prim)));
         }
@@ -253,12 +278,28 @@ impl<'a> Parser<'a> {
         if self.iter.peek().is_none() {
             return Ok(None);
         }
+        let mut qualifiers = TypeQualifiers::empty();
+        while let Some(qualifier) = self.read_type_qualifier()? {
+            qualifiers |= qualifier;
+        }
         let mut ty = self
-            .read_type()?
+            .read_base_type()?
             .unwrap_or(Type::Primitive(PrimitiveType::Int));
+        while let Some(qualifier) = self.read_type_qualifier()? {
+            qualifiers |= qualifier;
+        }
+        if !qualifiers.is_empty() {
+            ty = Type::Qualified(qualifiers, Box::new(ty));
+        }
         while self.iter.advance_if_punc(Punctuator::Star)? {
-            // TODO: Should be in read_type?
             ty = Type::Pointer(Box::new(ty));
+            let mut qualifiers = TypeQualifiers::empty();
+            while let Some(qualifier) = self.read_type_qualifier()? {
+                qualifiers |= qualifier;
+            }
+            if !qualifiers.is_empty() {
+                ty = Type::Qualified(qualifiers, Box::new(ty));
+            }
         }
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             return Ok(Some(ExternalDeclaration::Nothing));
@@ -326,8 +367,8 @@ mod tests {
             parse_one_external_declaration(r#"abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::Int),
-            )),
+                Type::Primitive(PrimitiveType::Int)
+            ))
         );
         // assert_eq!(
         //     parse_one_external_declaration(r#"(abcd);"#),
@@ -340,22 +381,61 @@ mod tests {
             parse_one_external_declaration(r#"int abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::Int),
-            )),
+                Type::Primitive(PrimitiveType::Int)
+            ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"unsigned char abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::UnsignedChar),
-            )),
+                Type::Primitive(PrimitiveType::UnsignedChar)
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"*abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::Int)))
+            ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"signed long long int * abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::LongLong))),
-            )),
+                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::LongLong)))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"const short * abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Pointer(Box::new(Type::Qualified(
+                    TypeQualifiers::CONST,
+                    Box::new(Type::Primitive(PrimitiveType::Short))
+                )))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"short const * abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Pointer(Box::new(Type::Qualified(
+                    TypeQualifiers::CONST,
+                    Box::new(Type::Primitive(PrimitiveType::Short))
+                )))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"float * const abcd;"#),
+            Some(ExternalDeclaration::Declaration(
+                "abcd".to_string(),
+                Type::Qualified(
+                    TypeQualifiers::CONST,
+                    Box::new(Type::Pointer(Box::new(Type::Primitive(
+                        PrimitiveType::Float
+                    ))))
+                )
+            ))
         );
     }
 }
