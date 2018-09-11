@@ -71,11 +71,7 @@ where
         F: FnMut(&I::Item) -> bool,
     {
         match self.peek() {
-            Some(x) => if predicate(x) {
-                true
-            } else {
-                false
-            },
+            Some(x) => predicate(x),
             None => false,
         }
     }

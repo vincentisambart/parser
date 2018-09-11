@@ -75,7 +75,7 @@ enum PrimitiveType {
 
 bitflags! {
     struct TypeQualifiers: u8 {
-        const CONST    = 1 << 0;
+        const CONST    = 1;
         const VOLATILE = 1 << 1;
         const RESTRICT = 1 << 2;
         const ATOMIC   = 1 << 3;
@@ -325,12 +325,10 @@ impl<'a> Parser<'a> {
                 Some(Ok(token)) => {
                     Err(ParseError::UnexpectedToken(token.token(), token.position()))
                 }
-                Some(Err(err)) => return Err(err.into()),
-                None => {
-                    return Err(ParseError::ExpectingToken(Token::Punctuator(
-                        Punctuator::Semicolon,
-                    )))
-                }
+                Some(Err(err)) => Err(err.into()),
+                None => Err(ParseError::ExpectingToken(Token::Punctuator(
+                    Punctuator::Semicolon,
+                ))),
             }
         }
     }
