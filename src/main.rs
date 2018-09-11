@@ -85,9 +85,20 @@ bitflags! {
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
     Primitive(PrimitiveType),
-    Pointer(Box<Type>),
-    Qualified(TypeQualifiers, Box<Type>),
-    UserDefined(String, Rc<Type>),
+    Pointer(Box<QualType>),
+    UserDefined(String, Rc<QualType>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QualType {
+    ty: Type,
+    qualifiers: TypeQualifiers,
+}
+
+impl QualType {
+    fn new(ty: Type, qualifiers: TypeQualifiers) -> QualType {
+        QualType { ty, qualifiers }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +118,7 @@ struct FunctionType {
 
 #[derive(Debug, Clone, PartialEq)]
 enum ExternalDeclaration {
-    Declaration(String, Type),
+    Declaration(String, QualType),
     FunctionDefinition(String, FunctionType),
     Nothing,
 }
@@ -278,28 +289,26 @@ impl<'a> Parser<'a> {
         if self.iter.peek().is_none() {
             return Ok(None);
         }
-        let mut qualifiers = TypeQualifiers::empty();
-        while let Some(qualifier) = self.read_type_qualifier()? {
-            qualifiers |= qualifier;
-        }
-        let mut ty = self
-            .read_base_type()?
-            .unwrap_or(Type::Primitive(PrimitiveType::Int));
-        while let Some(qualifier) = self.read_type_qualifier()? {
-            qualifiers |= qualifier;
-        }
-        if !qualifiers.is_empty() {
-            ty = Type::Qualified(qualifiers, Box::new(ty));
-        }
-        while self.iter.advance_if_punc(Punctuator::Star)? {
-            ty = Type::Pointer(Box::new(ty));
+        let base_qual_ty = {
             let mut qualifiers = TypeQualifiers::empty();
             while let Some(qualifier) = self.read_type_qualifier()? {
                 qualifiers |= qualifier;
             }
-            if !qualifiers.is_empty() {
-                ty = Type::Qualified(qualifiers, Box::new(ty));
+            let mut ty = self
+                .read_base_type()?
+                .unwrap_or(Type::Primitive(PrimitiveType::Int));
+            while let Some(qualifier) = self.read_type_qualifier()? {
+                qualifiers |= qualifier;
             }
+            QualType::new(ty, qualifiers)
+        };
+        let mut qual_ty = base_qual_ty;
+        while self.iter.advance_if_punc(Punctuator::Star)? {
+            let mut qualifiers = TypeQualifiers::empty();
+            while let Some(qualifier) = self.read_type_qualifier()? {
+                qualifiers |= qualifier;
+            }
+            qual_ty = QualType::new(Type::Pointer(Box::new(qual_ty)), qualifiers)
         }
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             return Ok(Some(ExternalDeclaration::Nothing));
@@ -319,7 +328,7 @@ impl<'a> Parser<'a> {
         };
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            Ok(Some(ExternalDeclaration::Declaration(ident, ty)))
+            Ok(Some(ExternalDeclaration::Declaration(ident, qual_ty)))
         } else {
             match self.iter.next() {
                 Some(Ok(token)) => {
@@ -365,7 +374,7 @@ mod tests {
             parse_one_external_declaration(r#"abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::Int)
+                QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty())
             ))
         );
         // assert_eq!(
@@ -379,59 +388,81 @@ mod tests {
             parse_one_external_declaration(r#"int abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::Int)
+                QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"unsigned char abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Primitive(PrimitiveType::UnsignedChar)
+                QualType::new(
+                    Type::Primitive(PrimitiveType::UnsignedChar),
+                    TypeQualifiers::empty()
+                )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"*abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::Int)))
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::Primitive(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    ))),
+                    TypeQualifiers::empty()
+                )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"signed long long int * abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Pointer(Box::new(Type::Primitive(PrimitiveType::LongLong)))
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::Primitive(PrimitiveType::LongLong),
+                        TypeQualifiers::empty()
+                    ))),
+                    TypeQualifiers::empty()
+                )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"const short * abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Pointer(Box::new(Type::Qualified(
-                    TypeQualifiers::CONST,
-                    Box::new(Type::Primitive(PrimitiveType::Short))
-                )))
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::Primitive(PrimitiveType::Short),
+                        TypeQualifiers::CONST
+                    ))),
+                    qualifiers: TypeQualifiers::empty()
+                )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"short const * abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Pointer(Box::new(Type::Qualified(
-                    TypeQualifiers::CONST,
-                    Box::new(Type::Primitive(PrimitiveType::Short))
-                )))
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::Primitive(PrimitiveType::Short),
+                        TypeQualifiers::CONST
+                    ))),
+                    TypeQualifiers::empty()
+                )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"float * const abcd;"#),
             Some(ExternalDeclaration::Declaration(
                 "abcd".to_string(),
-                Type::Qualified(
-                    TypeQualifiers::CONST,
-                    Box::new(Type::Pointer(Box::new(Type::Primitive(
-                        PrimitiveType::Float
-                    ))))
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::Primitive(PrimitiveType::Float),
+                        TypeQualifiers::empty()
+                    ))),
+                    TypeQualifiers::CONST
                 )
             ))
         );
