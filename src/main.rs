@@ -289,6 +289,14 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
+    fn expecting_token(&mut self, expected_token: Token) -> ParseError {
+        match self.iter.next() {
+            Some(Ok(token)) => ParseError::UnexpectedToken(token.token(), token.position()),
+            Some(Err(err)) => err.into(),
+            None => ParseError::ExpectingToken(expected_token),
+        }
+    }
+
     fn read_next_external_declaration(&mut self) -> Result<Option<ExternalDecl>, ParseError> {
         if self.iter.peek().is_none() {
             return Ok(None);
@@ -320,28 +328,33 @@ impl<'a> Parser<'a> {
         let ident = if let Some(ident) = self.iter.next_if_any_ident()? {
             ident
         } else {
-            return match self.iter.next() {
-                Some(Ok(token)) => {
-                    Err(ParseError::UnexpectedToken(token.token(), token.position()))
-                }
-                Some(Err(err)) => Err(err.into()),
-                None => Err(ParseError::ExpectingToken(Token::Punctuator(
-                    Punctuator::Semicolon,
-                ))),
-            };
+            return Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)));
         };
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
+            return Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)));
+        }
+
+        if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+            // If the declaration is followed by a left parenthesis, it must be a function definition.
+            // TODO: Handle parameters
+            if !self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+                return Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)));
+            }
+
+            if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                Ok(Some(ExternalDecl::FuncDef(
+                    ident,
+                    FuncType::new(qual_ty, FuncArgs::Undefined),
+                )))
+            } else {
+                Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)))
+            }
         } else {
-            match self.iter.next() {
-                Some(Ok(token)) => {
-                    Err(ParseError::UnexpectedToken(token.token(), token.position()))
-                }
-                Some(Err(err)) => Err(err.into()),
-                None => Err(ParseError::ExpectingToken(Token::Punctuator(
-                    Punctuator::Semicolon,
-                ))),
+            if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
+            } else {
+                Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)))
             }
         }
     }
