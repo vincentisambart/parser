@@ -102,7 +102,7 @@ impl QualType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum FunctionArguments {
+enum FuncArgs {
     Undefined,
     Defined {
         args: Vec<(String, Type)>,
@@ -111,15 +111,21 @@ enum FunctionArguments {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct FunctionType {
-    return_type: Type,
-    arguments: FunctionArguments,
+struct FuncType {
+    ret_type: QualType,
+    args: FuncArgs,
+}
+
+impl FuncType {
+    fn new(ret_type: QualType, args: FuncArgs) -> FuncType {
+        FuncType { ret_type, args }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ExternalDeclaration {
-    Declaration(String, QualType),
-    FunctionDefinition(String, FunctionType),
+enum ExternalDecl {
+    VarDecl(String, QualType),
+    FuncDef(String, FuncType),
     Nothing,
 }
 
@@ -283,9 +289,7 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    fn read_next_external_declaration(
-        &mut self,
-    ) -> Result<Option<ExternalDeclaration>, ParseError> {
+    fn read_next_external_declaration(&mut self) -> Result<Option<ExternalDecl>, ParseError> {
         if self.iter.peek().is_none() {
             return Ok(None);
         }
@@ -311,7 +315,7 @@ impl<'a> Parser<'a> {
             qual_ty = QualType::new(Type::Pointer(Box::new(qual_ty)), qualifiers)
         }
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            return Ok(Some(ExternalDeclaration::Nothing));
+            return Ok(Some(ExternalDecl::Nothing));
         }
         let ident = if let Some(ident) = self.iter.next_if_any_ident()? {
             ident
@@ -328,7 +332,7 @@ impl<'a> Parser<'a> {
         };
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            Ok(Some(ExternalDeclaration::Declaration(ident, qual_ty)))
+            Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
         } else {
             match self.iter.next() {
                 Some(Ok(token)) => {
@@ -347,7 +351,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
-    fn parse_one_external_declaration(code: &str) -> Option<ExternalDeclaration> {
+    fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
         let mut parser = Parser::from(code);
         let decl = match parser.read_next_external_declaration() {
             Ok(Some(decl)) => decl,
@@ -372,28 +376,28 @@ mod tests {
         assert_eq!(parse_one_external_declaration(r#""#), None);
         assert_eq!(
             parse_one_external_declaration(r#"abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty())
             ))
         );
         // assert_eq!(
         //     parse_one_external_declaration(r#"(abcd);"#),
-        //     Some(ExternalDeclaration::Declaration(
+        //     Some(ExternalDecl::VarDecl(
         //         "abcd".to_string(),
         //         Type::Primitive(PrimitiveType::Int),
         //     )),
         // );
         assert_eq!(
             parse_one_external_declaration(r#"int abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"unsigned char abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Primitive(PrimitiveType::UnsignedChar),
@@ -403,7 +407,7 @@ mod tests {
         );
         assert_eq!(
             parse_one_external_declaration(r#"*abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Pointer(Box::new(QualType::new(
@@ -416,7 +420,7 @@ mod tests {
         );
         assert_eq!(
             parse_one_external_declaration(r#"signed long long int * abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Pointer(Box::new(QualType::new(
@@ -429,20 +433,20 @@ mod tests {
         );
         assert_eq!(
             parse_one_external_declaration(r#"const short * abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Pointer(Box::new(QualType::new(
                         Type::Primitive(PrimitiveType::Short),
                         TypeQualifiers::CONST
                     ))),
-                    qualifiers: TypeQualifiers::empty()
+                    TypeQualifiers::empty()
                 )
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"short const * abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Pointer(Box::new(QualType::new(
@@ -455,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             parse_one_external_declaration(r#"float * const abcd;"#),
-            Some(ExternalDeclaration::Declaration(
+            Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
                 QualType::new(
                     Type::Pointer(Box::new(QualType::new(
@@ -463,6 +467,16 @@ mod tests {
                         TypeQualifiers::empty()
                     ))),
                     TypeQualifiers::CONST
+                )
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"foo();"#),
+            Some(ExternalDecl::FuncDef(
+                "foo".to_string(),
+                FuncType::new(
+                    QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                    FuncArgs::Undefined
                 )
             ))
         );
