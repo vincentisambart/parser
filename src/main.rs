@@ -86,6 +86,7 @@ bitflags! {
 enum Type {
     Primitive(PrimitiveType),
     Pointer(Box<QualType>),
+    FuncPointer(Box<FuncType>),
     UserDefined(String, Rc<QualType>),
 }
 
@@ -301,6 +302,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // Should be called just after having read an opening parenthesis.
+    fn read_func_args(&mut self) -> Result<FuncArgs, ParseError> {
+        // TODO: Handle parameters
+        self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+        Ok(FuncArgs::Undefined)
+    }
+
     fn read_next_external_declaration(&mut self) -> Result<Option<ExternalDecl>, ParseError> {
         if self.iter.peek().is_none() {
             return Ok(None);
@@ -310,7 +318,7 @@ impl<'a> Parser<'a> {
             while let Some(qualifier) = self.read_type_qualifier()? {
                 qualifiers |= qualifier;
             }
-            let mut ty = self
+            let ty = self
                 .read_base_type()?
                 .unwrap_or(Type::Primitive(PrimitiveType::Int));
             while let Some(qualifier) = self.read_type_qualifier()? {
@@ -318,38 +326,86 @@ impl<'a> Parser<'a> {
             }
             QualType::new(ty, qualifiers)
         };
-        let mut qual_ty = base_qual_ty;
-        while self.iter.advance_if_punc(Punctuator::Star)? {
-            let mut qualifiers = TypeQualifiers::empty();
-            while let Some(qualifier) = self.read_type_qualifier()? {
-                qualifiers |= qualifier;
+        let mut ptr_qualifs = Vec::new();
+        let mut ptr_qualifs_stack = Vec::new();
+        let ident = loop {
+            if self.iter.advance_if_punc(Punctuator::Star)? {
+                let mut qualifiers = TypeQualifiers::empty();
+                while let Some(qualifier) = self.read_type_qualifier()? {
+                    qualifiers |= qualifier;
+                }
+                ptr_qualifs.push(qualifiers);
+            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                ptr_qualifs_stack.push(ptr_qualifs);
+                ptr_qualifs = Vec::new();
+            } else if let Some(ident) = self.iter.next_if_any_ident()? {
+                ptr_qualifs_stack.push(ptr_qualifs);
+                break ident;
+            } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                if !ptr_qualifs_stack.is_empty() {
+                    panic!("TODO");
+                }
+                return Ok(Some(ExternalDecl::Nothing));
+            } else {
+                self.expect_token(Token::Punctuator(Punctuator::Semicolon));
             }
-            qual_ty = QualType::new(Type::Pointer(Box::new(qual_ty)), qualifiers)
-        }
-        let ident = if let Some(ident) = self.iter.next_if_any_ident()? {
-            ident
-        } else {
-            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
-            return Ok(Some(ExternalDecl::Nothing));
         };
+        let mut ptr_qualifs_reversed_stack = Vec::new();
+        loop {
+            let ptr_qualifs = if let Some(ptr_qualifs) = ptr_qualifs_stack.pop() {
+                ptr_qualifs
+            } else {
+                panic!("TODO: Incorrect decl");
+            };
+            if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                let func_args = self.read_func_args()?;
+                ptr_qualifs_reversed_stack.push((ptr_qualifs, Some(func_args)));
+            } else {
+                ptr_qualifs_reversed_stack.push((ptr_qualifs, None));
+            }
+            if ptr_qualifs_stack.is_empty() {
+                break;
+            } else {
+                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis));
+            }
+        }
+        assert!(ptr_qualifs_stack.is_empty());
+        drop(ptr_qualifs_stack);
 
-        if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            return Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)));
+        self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
+
+        enum FuncOrQualType {
+            Func(FuncType),
+            QualType(QualType),
         }
 
-        if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-            // If the declaration is followed by a left parenthesis, it must be a function definition.
-            // TODO: Handle parameters
-            self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+        let mut func_or_qual_ty = FuncOrQualType::QualType(base_qual_ty);
+        while let Some((ptr_qualifs, func_args)) = ptr_qualifs_reversed_stack.pop() {
+            for qualifiers in ptr_qualifs {
+                func_or_qual_ty = match func_or_qual_ty {
+                    FuncOrQualType::QualType(qual_ty) => FuncOrQualType::QualType(QualType::new(
+                        Type::Pointer(Box::new(qual_ty)),
+                        qualifiers,
+                    )),
+                    FuncOrQualType::Func(func) => FuncOrQualType::QualType(QualType::new(
+                        Type::FuncPointer(Box::new(func)),
+                        qualifiers,
+                    )),
+                };
+            }
+            if let Some(func_args) = func_args {
+                func_or_qual_ty = match func_or_qual_ty {
+                    FuncOrQualType::QualType(qual_ty) => {
+                        FuncOrQualType::Func(FuncType::new(qual_ty, func_args))
+                    }
+                    FuncOrQualType::Func(_) => panic!("bad"),
+                };
+            }
+        }
 
-            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
-            Ok(Some(ExternalDecl::FuncDef(
-                ident,
-                FuncType::new(qual_ty, FuncArgs::Undefined),
-            )))
-        } else {
-            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
-            Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
+        match func_or_qual_ty {
+            FuncOrQualType::QualType(qual_ty) => Ok(Some(ExternalDecl::VarDecl(ident, qual_ty))),
+            FuncOrQualType::Func(func) => Ok(Some(ExternalDecl::FuncDef(ident, func))),
         }
     }
 }
@@ -388,13 +444,13 @@ mod tests {
                 QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty())
             ))
         );
-        // assert_eq!(
-        //     parse_one_external_declaration(r#"(abcd);"#),
-        //     Some(ExternalDecl::VarDecl(
-        //         "abcd".to_string(),
-        //         QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
-        //     )),
-        // );
+        assert_eq!(
+            parse_one_external_declaration(r#"(abcd);"#),
+            Some(ExternalDecl::VarDecl(
+                "abcd".to_string(),
+                QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+            )),
+        );
         assert_eq!(
             parse_one_external_declaration(r#"int abcd;"#),
             Some(ExternalDecl::VarDecl(
@@ -487,6 +543,73 @@ mod tests {
                 "foo".to_string(),
                 FuncType::new(
                     QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                    FuncArgs::Undefined
+                )
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"int (*foo)();"#),
+            Some(ExternalDecl::VarDecl(
+                "foo".to_string(),
+                QualType::new(
+                    Type::FuncPointer(Box::new(FuncType::new(
+                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                        FuncArgs::Undefined
+                    ))),
+                    TypeQualifiers::empty()
+                )
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"int (*(foo))();"#),
+            Some(ExternalDecl::VarDecl(
+                "foo".to_string(),
+                QualType::new(
+                    Type::FuncPointer(Box::new(FuncType::new(
+                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                        FuncArgs::Undefined
+                    ))),
+                    TypeQualifiers::empty()
+                )
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"int (*(*bar)())();"#),
+            Some(ExternalDecl::VarDecl(
+                "bar".to_string(),
+                QualType::new(
+                    Type::FuncPointer(Box::new(FuncType::new(
+                        QualType::new(
+                            Type::FuncPointer(Box::new(FuncType::new(
+                                QualType::new(
+                                    Type::Primitive(PrimitiveType::Int),
+                                    TypeQualifiers::empty()
+                                ),
+                                FuncArgs::Undefined
+                            ))),
+                            TypeQualifiers::empty()
+                        ),
+                        FuncArgs::Undefined
+                    ))),
+                    TypeQualifiers::empty()
+                )
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"int (*foo())();"#),
+            Some(ExternalDecl::FuncDef(
+                "foo".to_string(),
+                FuncType::new(
+                    QualType::new(
+                        Type::FuncPointer(Box::new(FuncType::new(
+                            QualType::new(
+                                Type::Primitive(PrimitiveType::Int),
+                                TypeQualifiers::empty()
+                            ),
+                            FuncArgs::Undefined
+                        ))),
+                        TypeQualifiers::empty()
+                    ),
                     FuncArgs::Undefined
                 )
             ))
