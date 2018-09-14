@@ -289,11 +289,15 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    fn expecting_token(&mut self, expected_token: Token) -> ParseError {
+    fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
         match self.iter.next() {
-            Some(Ok(token)) => ParseError::UnexpectedToken(token.token(), token.position()),
-            Some(Err(err)) => err.into(),
-            None => ParseError::ExpectingToken(expected_token),
+            Some(Ok(token)) => if token.token() == expected_token {
+                Ok(())
+            } else {
+                Err(ParseError::UnexpectedToken(token.token(), token.position()))
+            },
+            Some(Err(err)) => Err(err.into()),
+            None => Err(ParseError::ExpectingToken(expected_token)),
         }
     }
 
@@ -322,13 +326,11 @@ impl<'a> Parser<'a> {
             }
             qual_ty = QualType::new(Type::Pointer(Box::new(qual_ty)), qualifiers)
         }
-        if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            return Ok(Some(ExternalDecl::Nothing));
-        }
         let ident = if let Some(ident) = self.iter.next_if_any_ident()? {
             ident
         } else {
-            return Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)));
+            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
+            return Ok(Some(ExternalDecl::Nothing));
         };
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
@@ -338,24 +340,16 @@ impl<'a> Parser<'a> {
         if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
             // If the declaration is followed by a left parenthesis, it must be a function definition.
             // TODO: Handle parameters
-            if !self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
-                return Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)));
-            }
+            self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
 
-            if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-                Ok(Some(ExternalDecl::FuncDef(
-                    ident,
-                    FuncType::new(qual_ty, FuncArgs::Undefined),
-                )))
-            } else {
-                Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)))
-            }
+            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
+            Ok(Some(ExternalDecl::FuncDef(
+                ident,
+                FuncType::new(qual_ty, FuncArgs::Undefined),
+            )))
         } else {
-            if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-                Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
-            } else {
-                Err(self.expecting_token(Token::Punctuator(Punctuator::Semicolon)))
-            }
+            self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
+            Ok(Some(ExternalDecl::VarDecl(ident, qual_ty)))
         }
     }
 }
@@ -398,7 +392,7 @@ mod tests {
         //     parse_one_external_declaration(r#"(abcd);"#),
         //     Some(ExternalDecl::VarDecl(
         //         "abcd".to_string(),
-        //         Type::Primitive(PrimitiveType::Int),
+        //         QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
         //     )),
         // );
         assert_eq!(
@@ -407,6 +401,10 @@ mod tests {
                 "abcd".to_string(),
                 QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
             ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"signed long;"#),
+            Some(ExternalDecl::Nothing)
         );
         assert_eq!(
             parse_one_external_declaration(r#"unsigned char abcd;"#),
