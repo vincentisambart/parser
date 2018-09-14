@@ -310,7 +310,7 @@ lazy_static! {
 pub enum LexError {
     UnexpectedEOF(Position),
     UnexpectedChar(char, Position),
-    InvalidPreprocessingDirective(Position),
+    InvalidPreprocDirective(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -526,17 +526,22 @@ impl<'a> TokenIter<'a> {
     }
 
     fn read_char_literal(&mut self, prefix: Option<CharPrefix>) -> Result<Token, LexError> {
-        self.scanner.next_if(any_of!('\'')).unwrap();
-        let t = if self.scanner.advance_if(any_of!('\\')) {
-            let c = self.read_char_escape()?;
-            Token::CharLiteral(c, prefix)
-        } else if let Some(c) = self.scanner.next() {
-            Token::CharLiteral(c, prefix)
-        } else {
-            return Err(LexError::UnexpectedEOF(self.position.clone()));
+        self.scanner
+            .next_if(any_of!('\''))
+            .expect("read_char_literal should only be called when next character is \"'\"");
+        let t = match self.scanner.next() {
+            Some('\\') => {
+                let c = self.read_char_escape()?;
+                Token::CharLiteral(c, prefix)
+            }
+            Some(c) => Token::CharLiteral(c, prefix),
+            None => return Err(LexError::UnexpectedEOF(self.position.clone())),
         };
-        self.scanner.next_if(any_of!('\'')).unwrap();
-        Ok(t)
+        match self.scanner.next() {
+            Some('\'') => Ok(t),
+            Some(c) => Err(LexError::UnexpectedChar(c, self.position.clone())),
+            None => Err(LexError::UnexpectedEOF(self.position.clone())),
+        }
     }
 
     fn string_literal_prefix(prefix: &str) -> Option<StringPrefix> {
@@ -554,16 +559,15 @@ impl<'a> TokenIter<'a> {
         let mut string = String::new();
 
         loop {
-            if self.scanner.advance_if(any_of!('"')) {
-                break;
-            } else if self.scanner.advance_if(any_of!('\\')) {
-                let c = self.read_char_escape()?;
-                string.push(c);
-            } else if let Some(c) = self.scanner.next() {
-                string.push(c);
-            } else {
-                return Err(LexError::UnexpectedEOF(self.position.clone()));
-            };
+            match self.scanner.next() {
+                Some('"') => break,
+                Some('\\') => {
+                    let c = self.read_char_escape()?;
+                    string.push(c);
+                }
+                Some(c) => string.push(c),
+                None => return Err(LexError::UnexpectedEOF(self.position.clone())),
+            }
         }
 
         Ok(Token::StringLiteral(string, prefix))
@@ -576,28 +580,20 @@ impl<'a> TokenIter<'a> {
             Some(Token::Identifier(identifier)) => match identifier.as_str() {
                 // Handle "#line 1 file" as "#1 file"
                 "line" => return self.handle_preprocessing_directive(&directive[1..]),
-                _ => {
-                    return Err(LexError::InvalidPreprocessingDirective(
-                        self.position.clone(),
-                    ))
-                }
+                _ => return Err(LexError::InvalidPreprocDirective(self.position.clone())),
             },
             Some(Token::IntegerLiteral(literal, IntegerRepr::Dec, _)) => {
                 let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), 10) {
                     number
                 } else {
-                    return Err(LexError::InvalidPreprocessingDirective(
-                        self.position.clone(),
-                    ));
+                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
                 };
 
                 let file_path;
                 if let Some(Token::StringLiteral(text, None)) = iter.next() {
                     file_path = text;
                 } else {
-                    return Err(LexError::InvalidPreprocessingDirective(
-                        self.position.clone(),
-                    ));
+                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
                 }
                 self.position.line = line;
                 self.position.file_path = Rc::new(file_path.clone());
@@ -607,24 +603,22 @@ impl<'a> TokenIter<'a> {
                         None => break,
                         Some(Token::IntegerLiteral(_, _, _)) => (),
                         Some(_) => {
-                            return Err(LexError::InvalidPreprocessingDirective(
-                                self.position.clone(),
-                            ))
+                            return Err(LexError::InvalidPreprocDirective(self.position.clone()))
                         }
                     }
                 }
             }
-            _ => {
-                return Err(LexError::InvalidPreprocessingDirective(
-                    self.position.clone(),
-                ))
-            }
+            _ => return Err(LexError::InvalidPreprocDirective(self.position.clone())),
         }
         Ok(())
     }
 
     fn read_punctuator(&mut self) -> Result<Token, LexError> {
-        let token = match self.scanner.next().unwrap() {
+        let token = match self
+            .scanner
+            .next()
+            .expect("read_punctuator should be called with at least one char available")
+        {
             '[' => Token::Punctuator(Punctuator::LeftSquareBracket),
             ']' => Token::Punctuator(Punctuator::RightSquareBracket),
             '(' => Token::Punctuator(Punctuator::LeftParenthesis),
@@ -912,7 +906,7 @@ impl<'a> Iterator for TokenIter<'a> {
             };
             if token == Token::Punctuator(Punctuator::Hash) {
                 if !self.is_start_of_line {
-                    break Some(Err(LexError::InvalidPreprocessingDirective(
+                    break Some(Err(LexError::InvalidPreprocDirective(
                         self.position.clone(),
                     )));
                 } else {
