@@ -347,7 +347,7 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(Some(ExternalDecl::Nothing));
             } else {
-                self.expect_token(Token::Punctuator(Punctuator::Semicolon));
+                self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
             }
         };
         let mut ptr_qualifs_reversed_stack = Vec::new();
@@ -366,7 +366,7 @@ impl<'a> Parser<'a> {
             if ptr_qualifs_stack.is_empty() {
                 break;
             } else {
-                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis));
+                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
             }
         }
         assert!(ptr_qualifs_stack.is_empty());
