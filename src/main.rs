@@ -614,6 +614,28 @@ mod tests {
                 )
             ))
         );
+        assert_eq!(
+            parse_one_external_declaration(r#"char const * (**hogehoge)();"#),
+            Some(ExternalDecl::VarDecl(
+                "hogehoge".to_string(),
+                QualType::new(
+                    Type::Pointer(Box::new(QualType::new(
+                        Type::FuncPointer(Box::new(FuncType::new(
+                            QualType::new(
+                                Type::Pointer(Box::new(QualType::new(
+                                    Type::Primitive(PrimitiveType::Char),
+                                    TypeQualifiers::CONST
+                                ))),
+                                TypeQualifiers::empty()
+                            ),
+                            FuncArgs::Undefined
+                        ))),
+                        TypeQualifiers::empty()
+                    ))),
+                    TypeQualifiers::empty()
+                )
+            ))
+        );
     }
 }
 
