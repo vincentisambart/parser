@@ -10,40 +10,38 @@ use std::iter::Peekable;
 use std::rc::Rc;
 
 trait PeekingToken {
-    fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, LexError>;
-    fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, LexError>;
-    fn next_if_any_ident(&mut self) -> Result<Option<String>, LexError>;
+    fn advance_if_kw(&mut self, kw: Keyword) -> bool;
+    fn advance_if_punc(&mut self, punc: Punctuator) -> bool;
+    fn next_if_any_ident(&mut self) -> Option<String>;
 }
 
 impl<I> PeekingToken for Peekable<I>
 where
-    I: Iterator<Item = Result<PositionedToken, LexError>>,
+    I: Iterator<Item = PositionedToken>,
 {
-    fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
-        let token = self.next_if_lifting_err(|token| match token {
+    fn advance_if_kw(&mut self, kw: Keyword) -> bool {
+        self.advance_if(|token| match token {
             PositionedToken(Token::Keyword(x), _) if *x == kw => true,
             _ => false,
-        })?;
-        Ok(token.is_some())
+        })
     }
 
-    fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, LexError> {
-        let token = self.next_if_lifting_err(|token| match token {
+    fn advance_if_punc(&mut self, punc: Punctuator) -> bool {
+        self.advance_if(|token| match token {
             PositionedToken(Token::Punctuator(x), _) if *x == punc => true,
             _ => false,
-        })?;
-        Ok(token.is_some())
+        })
     }
 
-    fn next_if_any_ident(&mut self) -> Result<Option<String>, LexError> {
-        let token = self.next_if_lifting_err(|token| match token {
+    fn next_if_any_ident(&mut self) -> Option<String> {
+        let token = self.next_if(|token| match token {
             PositionedToken(Token::Identifier(_), _) => true,
             _ => false,
-        })?;
+        });
         match token {
-            Some(PositionedToken(Token::Identifier(ident), _)) => Ok(Some(ident)),
+            Some(PositionedToken(Token::Identifier(ident), _)) => Some(ident),
             Some(_) => unreachable!(),
-            None => Ok(None),
+            None => None,
         }
     }
 }
@@ -141,16 +139,32 @@ impl From<LexError> for ParseError {
     }
 }
 
-struct Parser<'a> {
-    iter: Peekable<TokenIter<'a>>,
+struct Parser<I: Iterator<Item = PositionedToken>> {
+    iter: Peekable<I>,
     types_stack: Vec<HashMap<String, Rc<Type>>>,
 }
 
-impl<'a> Parser<'a> {
-    fn from(code: &'a str) -> Parser<'a> {
-        let iter = TokenIter::from(code).peekable();
+impl Parser<std::vec::IntoIter<PositionedToken>> {
+    fn from_code(code: &str) -> Result<Self, ParseError> {
+        let iter = TokenIter::from(code);
+        let mut tokens = Vec::new();
+        for result in iter {
+            match result {
+                Ok(token) => tokens.push(token),
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(Self::from(tokens.into_iter()))
+    }
+}
+
+impl<I> Parser<I>
+where
+    I: Iterator<Item = PositionedToken>,
+{
+    fn from(iter: I) -> Parser<I> {
         Parser {
-            iter,
+            iter: iter.peekable(),
             types_stack: Vec::new(),
         }
     }
@@ -168,143 +182,135 @@ impl<'a> Parser<'a> {
         self.type_by_name(name).is_some()
     }
 
-    fn read_type_qualifier(&mut self) -> Result<Option<TypeQualifiers>, ParseError> {
-        if self.iter.advance_if_kw(Keyword::Const)? {
-            Ok(Some(TypeQualifiers::CONST))
-        } else if self.iter.advance_if_kw(Keyword::Volatile)? {
-            Ok(Some(TypeQualifiers::VOLATILE))
-        } else if self.iter.advance_if_kw(Keyword::Restrict)? {
-            Ok(Some(TypeQualifiers::RESTRICT))
-        } else if self.iter.advance_if_kw(Keyword::Atomic)? {
-            Ok(Some(TypeQualifiers::ATOMIC))
+    fn read_type_qualifier(&mut self) -> Option<TypeQualifiers> {
+        if self.iter.advance_if_kw(Keyword::Const) {
+            Some(TypeQualifiers::CONST)
+        } else if self.iter.advance_if_kw(Keyword::Volatile) {
+            Some(TypeQualifiers::VOLATILE)
+        } else if self.iter.advance_if_kw(Keyword::Restrict) {
+            Some(TypeQualifiers::RESTRICT)
+        } else if self.iter.advance_if_kw(Keyword::Atomic) {
+            Some(TypeQualifiers::ATOMIC)
         } else {
-            Ok(None)
+            None
         }
     }
 
-    fn read_base_type(&mut self) -> Result<Option<Type>, ParseError> {
-        if let Some(prim) = self.read_primitive_type()? {
-            return Ok(Some(Type::Primitive(prim)));
-        }
-        let token = match self.iter.peek() {
-            Some(Ok(PositionedToken(token, _))) => token.clone(),
-            Some(Err(_)) => {
-                let err = self.iter.next().unwrap().err().unwrap().into();
-                return Err(err);
-            }
-            None => return Ok(None),
+    fn read_base_type(&mut self) -> Option<Type> {
+        if let Some(prim) = self.read_primitive_type() {
+            return Some(Type::Primitive(prim));
         };
-        match token {
-            Token::Identifier(identifier) => {
-                if self.is_type_name(identifier.as_ref()) {
+        match self.iter.peek() {
+            Some(PositionedToken(Token::Identifier(identifier), _)) => {
+                // TODO: Clone should not be needed (moving is_type_name to another struct might do the trick)
+                let copy = identifier.clone();
+                if self.is_type_name(copy.as_ref()) {
                     panic!("TODO")
                 } else {
-                    Ok(None)
+                    None
                 }
             }
-            Token::Keyword(Keyword::Int) => {
+            Some(PositionedToken(Token::Keyword(Keyword::Int), _)) => {
                 self.iter.next();
-                Ok(Some(Type::Primitive(PrimitiveType::Int)))
+                Some(Type::Primitive(PrimitiveType::Int))
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
-    fn read_primitive_type(&mut self) -> Result<Option<PrimitiveType>, ParseError> {
-        let ty = if self.iter.advance_if_kw(Keyword::Void)? {
+    fn read_primitive_type(&mut self) -> Option<PrimitiveType> {
+        if self.iter.advance_if_kw(Keyword::Void) {
             Some(PrimitiveType::Void)
-        } else if self.iter.advance_if_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Char) {
             Some(PrimitiveType::Char)
-        } else if self.iter.advance_if_kw(Keyword::Signed)? {
-            if self.iter.advance_if_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Signed) {
+            if self.iter.advance_if_kw(Keyword::Char) {
                 Some(PrimitiveType::SignedChar)
-            } else if self.iter.advance_if_kw(Keyword::Short)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Short) {
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::Short)
-            } else if self.iter.advance_if_kw(Keyword::Long)? {
-                if self.iter.advance_if_kw(Keyword::Long)? {
-                    self.iter.advance_if_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Long) {
+                if self.iter.advance_if_kw(Keyword::Long) {
+                    self.iter.advance_if_kw(Keyword::Int);
                     Some(PrimitiveType::LongLong)
                 } else {
-                    self.iter.advance_if_kw(Keyword::Int)?;
+                    self.iter.advance_if_kw(Keyword::Int);
                     Some(PrimitiveType::Long)
                 }
             } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::Int)
             }
-        } else if self.iter.advance_if_kw(Keyword::Unsigned)? {
-            if self.iter.advance_if_kw(Keyword::Char)? {
+        } else if self.iter.advance_if_kw(Keyword::Unsigned) {
+            if self.iter.advance_if_kw(Keyword::Char) {
                 Some(PrimitiveType::UnsignedChar)
-            } else if self.iter.advance_if_kw(Keyword::Short)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Short) {
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::UnsignedShort)
-            } else if self.iter.advance_if_kw(Keyword::Long)? {
-                if self.iter.advance_if_kw(Keyword::Long)? {
-                    self.iter.advance_if_kw(Keyword::Int)?;
+            } else if self.iter.advance_if_kw(Keyword::Long) {
+                if self.iter.advance_if_kw(Keyword::Long) {
+                    self.iter.advance_if_kw(Keyword::Int);
                     Some(PrimitiveType::UnsignedLongLong)
                 } else {
-                    self.iter.advance_if_kw(Keyword::Int)?;
+                    self.iter.advance_if_kw(Keyword::Int);
                     Some(PrimitiveType::UnsignedLong)
                 }
             } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::UnsignedInt)
             }
-        } else if self.iter.advance_if_kw(Keyword::Short)? {
-            self.iter.advance_if_kw(Keyword::Int)?;
+        } else if self.iter.advance_if_kw(Keyword::Short) {
+            self.iter.advance_if_kw(Keyword::Int);
             Some(PrimitiveType::Short)
-        } else if self.iter.advance_if_kw(Keyword::Int)? {
+        } else if self.iter.advance_if_kw(Keyword::Int) {
             Some(PrimitiveType::Int)
-        } else if self.iter.advance_if_kw(Keyword::Long)? {
-            if self.iter.advance_if_kw(Keyword::Long)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
+        } else if self.iter.advance_if_kw(Keyword::Long) {
+            if self.iter.advance_if_kw(Keyword::Long) {
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::LongLong)
-            } else if self.iter.advance_if_kw(Keyword::Double)? {
-                if self.iter.advance_if_kw(Keyword::Complex)? {
+            } else if self.iter.advance_if_kw(Keyword::Double) {
+                if self.iter.advance_if_kw(Keyword::Complex) {
                     Some(PrimitiveType::LongDoubleComplex)
                 } else {
                     Some(PrimitiveType::LongDouble)
                 }
             } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
+                self.iter.advance_if_kw(Keyword::Int);
                 Some(PrimitiveType::Long)
             }
-        } else if self.iter.advance_if_kw(Keyword::Float)? {
-            if self.iter.advance_if_kw(Keyword::Complex)? {
+        } else if self.iter.advance_if_kw(Keyword::Float) {
+            if self.iter.advance_if_kw(Keyword::Complex) {
                 Some(PrimitiveType::FloatComplex)
             } else {
                 Some(PrimitiveType::Float)
             }
-        } else if self.iter.advance_if_kw(Keyword::Double)? {
-            if self.iter.advance_if_kw(Keyword::Complex)? {
+        } else if self.iter.advance_if_kw(Keyword::Double) {
+            if self.iter.advance_if_kw(Keyword::Complex) {
                 Some(PrimitiveType::DoubleComplex)
             } else {
                 Some(PrimitiveType::Double)
             }
-        } else if self.iter.advance_if_kw(Keyword::Bool)? {
+        } else if self.iter.advance_if_kw(Keyword::Bool) {
             Some(PrimitiveType::Bool)
         } else {
             None
-        };
-        Ok(ty)
+        }
     }
 
     fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
         match self.iter.next() {
-            Some(Ok(PositionedToken(token, position))) => if token == expected_token {
+            Some(PositionedToken(token, position)) => if token == expected_token {
                 Ok(())
             } else {
                 Err(ParseError::UnexpectedToken(token, position))
             },
-            Some(Err(err)) => Err(err.into()),
             None => Err(ParseError::ExpectingToken(expected_token)),
         }
     }
 
     // Should be called just after having read an opening parenthesis.
     fn read_func_args(&mut self) -> Result<FuncArgs, ParseError> {
-        if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+        if self.iter.advance_if_punc(Punctuator::RightParenthesis) {
             return Ok(FuncArgs::Undefined);
         }
         // TODO: Handle parameters
@@ -317,13 +323,13 @@ impl<'a> Parser<'a> {
         }
         let base_qual_ty = {
             let mut qualifiers = TypeQualifiers::empty();
-            while let Some(qualifier) = self.read_type_qualifier()? {
+            while let Some(qualifier) = self.read_type_qualifier() {
                 qualifiers |= qualifier;
             }
             let ty = self
-                .read_base_type()?
+                .read_base_type()
                 .unwrap_or(Type::Primitive(PrimitiveType::Int));
-            while let Some(qualifier) = self.read_type_qualifier()? {
+            while let Some(qualifier) = self.read_type_qualifier() {
                 qualifiers |= qualifier;
             }
             QualType::new(ty, qualifiers)
@@ -331,19 +337,19 @@ impl<'a> Parser<'a> {
         let mut ptr_qualifs = Vec::new();
         let mut ptr_qualifs_stack = Vec::new();
         let ident = loop {
-            if self.iter.advance_if_punc(Punctuator::Star)? {
+            if self.iter.advance_if_punc(Punctuator::Star) {
                 let mut qualifiers = TypeQualifiers::empty();
-                while let Some(qualifier) = self.read_type_qualifier()? {
+                while let Some(qualifier) = self.read_type_qualifier() {
                     qualifiers |= qualifier;
                 }
                 ptr_qualifs.push(qualifiers);
-            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
                 ptr_qualifs_stack.push(ptr_qualifs);
                 ptr_qualifs = Vec::new();
-            } else if let Some(ident) = self.iter.next_if_any_ident()? {
+            } else if let Some(ident) = self.iter.next_if_any_ident() {
                 ptr_qualifs_stack.push(ptr_qualifs);
                 break ident;
-            } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+            } else if self.iter.advance_if_punc(Punctuator::Semicolon) {
                 if !ptr_qualifs_stack.is_empty() {
                     panic!("TODO");
                 }
@@ -359,7 +365,7 @@ impl<'a> Parser<'a> {
             } else {
                 panic!("TODO: Incorrect decl");
             };
-            if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+            if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
                 let func_args = self.read_func_args()?;
                 ptr_qualifs_reversed_stack.push((ptr_qualifs, Some(func_args)));
             } else {
@@ -417,7 +423,10 @@ mod tests {
     use super::*;
 
     fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
-        let mut parser = Parser::from(code);
+        let mut parser = match Parser::from_code(code) {
+            Ok(parser) => parser,
+            Err(err) => panic!(r#"Unexpected lexer error {:?} for "{:}""#, err, code),
+        };
         let decl = match parser.read_next_external_declaration() {
             Ok(Some(decl)) => decl,
             Ok(None) => return None,
@@ -614,9 +623,9 @@ mod tests {
     }
 }
 
-fn main() -> Result<(), LexError> {
-    let mut parser = Parser::from(r#"x;"#);
-    let decl = parser.read_next_external_declaration();
+fn main() -> Result<(), ParseError> {
+    let mut parser = Parser::from_code(r#"x;"#)?;
+    let decl = parser.read_next_external_declaration()?;
     println!("Declaration: {:?}", decl);
     Ok(())
 }

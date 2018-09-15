@@ -21,11 +21,6 @@ pub trait Peeking<I: Iterator> {
     where
         F: FnMut(&char) -> bool,
         I: Iterator<Item = char>;
-
-    fn next_if_lifting_err<T, E, F>(&mut self, predicate: F) -> Result<Option<T>, E>
-    where
-        F: FnMut(&T) -> bool,
-        I: Iterator<Item = Result<T, E>>;
 }
 
 impl<I> Peeking<I> for Peekable<I>
@@ -88,32 +83,6 @@ where
                 break;
             };
             self.next();
-        }
-    }
-
-    fn next_if_lifting_err<T, E, F>(&mut self, mut predicate: F) -> Result<Option<T>, E>
-    where
-        F: FnMut(&T) -> bool,
-        I: Iterator<Item = Result<T, E>>,
-    {
-        match self.peek() {
-            Some(Ok(x)) => if predicate(x) {
-                if let Some(Ok(x)) = self.next() {
-                    Ok(Some(x))
-                } else {
-                    unreachable!()
-                }
-            } else {
-                Ok(None)
-            },
-            Some(Err(_)) => {
-                if let Some(Err(err)) = self.next() {
-                    Err(err)
-                } else {
-                    unreachable!()
-                }
-            }
-            None => Ok(None),
         }
     }
 }
