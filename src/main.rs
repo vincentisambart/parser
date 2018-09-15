@@ -304,9 +304,11 @@ impl<'a> Parser<'a> {
 
     // Should be called just after having read an opening parenthesis.
     fn read_func_args(&mut self) -> Result<FuncArgs, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+            return Ok(FuncArgs::Undefined);
+        }
         // TODO: Handle parameters
-        self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
-        Ok(FuncArgs::Undefined)
+        panic!("TODO: Handle parameters")
     }
 
     fn read_next_external_declaration(&mut self) -> Result<Option<ExternalDecl>, ParseError> {
@@ -434,6 +436,21 @@ mod tests {
         }
     }
 
+    fn ptr(to: QualType) -> QualType {
+        QualType::new(Type::Pointer(Box::new(to)), TypeQualifiers::empty())
+    }
+
+    fn qual_ptr(to: QualType, qualifiers: TypeQualifiers) -> QualType {
+        QualType::new(Type::Pointer(Box::new(to)), qualifiers)
+    }
+
+    fn func_ptr(ret_type: QualType, args: FuncArgs) -> QualType {
+        QualType::new(
+            Type::FuncPointer(Box::new(FuncType::new(ret_type, args))),
+            TypeQualifiers::empty(),
+        )
+    }
+
     #[test]
     fn test_simple_declaration() {
         assert_eq!(parse_one_external_declaration(r#""#), None);
@@ -476,63 +493,51 @@ mod tests {
             parse_one_external_declaration(r#"*abcd;"#),
             Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
-                        Type::Primitive(PrimitiveType::Int),
-                        TypeQualifiers::empty()
-                    ))),
+                ptr(QualType::new(
+                    Type::Primitive(PrimitiveType::Int),
                     TypeQualifiers::empty()
-                )
+                ))
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"signed long long int * abcd;"#),
             Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
-                        Type::Primitive(PrimitiveType::LongLong),
-                        TypeQualifiers::empty()
-                    ))),
+                ptr(QualType::new(
+                    Type::Primitive(PrimitiveType::LongLong),
                     TypeQualifiers::empty()
-                )
+                ))
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"const short * abcd;"#),
             Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
-                        Type::Primitive(PrimitiveType::Short),
-                        TypeQualifiers::CONST
-                    ))),
-                    TypeQualifiers::empty()
-                )
+                ptr(QualType::new(
+                    Type::Primitive(PrimitiveType::Short),
+                    TypeQualifiers::CONST
+                ))
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"short const * abcd;"#),
             Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
-                        Type::Primitive(PrimitiveType::Short),
-                        TypeQualifiers::CONST
-                    ))),
-                    TypeQualifiers::empty()
-                )
+                ptr(QualType::new(
+                    Type::Primitive(PrimitiveType::Short),
+                    TypeQualifiers::CONST
+                ))
             ))
         );
         assert_eq!(
             parse_one_external_declaration(r#"float * const abcd;"#),
             Some(ExternalDecl::VarDecl(
                 "abcd".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
+                qual_ptr(
+                    QualType::new(
                         Type::Primitive(PrimitiveType::Float),
                         TypeQualifiers::empty()
-                    ))),
+                    ),
                     TypeQualifiers::CONST
                 )
             ))
@@ -551,12 +556,9 @@ mod tests {
             parse_one_external_declaration(r#"int (*foo)();"#),
             Some(ExternalDecl::VarDecl(
                 "foo".to_string(),
-                QualType::new(
-                    Type::FuncPointer(Box::new(FuncType::new(
-                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
-                        FuncArgs::Undefined
-                    ))),
-                    TypeQualifiers::empty()
+                func_ptr(
+                    QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                    FuncArgs::Undefined
                 )
             ))
         );
@@ -564,12 +566,9 @@ mod tests {
             parse_one_external_declaration(r#"int (*(foo))();"#),
             Some(ExternalDecl::VarDecl(
                 "foo".to_string(),
-                QualType::new(
-                    Type::FuncPointer(Box::new(FuncType::new(
-                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
-                        FuncArgs::Undefined
-                    ))),
-                    TypeQualifiers::empty()
+                func_ptr(
+                    QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                    FuncArgs::Undefined
                 )
             ))
         );
@@ -577,21 +576,12 @@ mod tests {
             parse_one_external_declaration(r#"int (*(*bar)())();"#),
             Some(ExternalDecl::VarDecl(
                 "bar".to_string(),
-                QualType::new(
-                    Type::FuncPointer(Box::new(FuncType::new(
-                        QualType::new(
-                            Type::FuncPointer(Box::new(FuncType::new(
-                                QualType::new(
-                                    Type::Primitive(PrimitiveType::Int),
-                                    TypeQualifiers::empty()
-                                ),
-                                FuncArgs::Undefined
-                            ))),
-                            TypeQualifiers::empty()
-                        ),
+                func_ptr(
+                    func_ptr(
+                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
                         FuncArgs::Undefined
-                    ))),
-                    TypeQualifiers::empty()
+                    ),
+                    FuncArgs::Undefined
                 )
             ))
         );
@@ -600,15 +590,9 @@ mod tests {
             Some(ExternalDecl::FuncDef(
                 "foo".to_string(),
                 FuncType::new(
-                    QualType::new(
-                        Type::FuncPointer(Box::new(FuncType::new(
-                            QualType::new(
-                                Type::Primitive(PrimitiveType::Int),
-                                TypeQualifiers::empty()
-                            ),
-                            FuncArgs::Undefined
-                        ))),
-                        TypeQualifiers::empty()
+                    func_ptr(
+                        QualType::new(Type::Primitive(PrimitiveType::Int), TypeQualifiers::empty()),
+                        FuncArgs::Undefined
                     ),
                     FuncArgs::Undefined
                 )
@@ -618,22 +602,13 @@ mod tests {
             parse_one_external_declaration(r#"char const * (**hogehoge)();"#),
             Some(ExternalDecl::VarDecl(
                 "hogehoge".to_string(),
-                QualType::new(
-                    Type::Pointer(Box::new(QualType::new(
-                        Type::FuncPointer(Box::new(FuncType::new(
-                            QualType::new(
-                                Type::Pointer(Box::new(QualType::new(
-                                    Type::Primitive(PrimitiveType::Char),
-                                    TypeQualifiers::CONST
-                                ))),
-                                TypeQualifiers::empty()
-                            ),
-                            FuncArgs::Undefined
-                        ))),
-                        TypeQualifiers::empty()
-                    ))),
-                    TypeQualifiers::empty()
-                )
+                ptr(func_ptr(
+                    ptr(QualType::new(
+                        Type::Primitive(PrimitiveType::Char),
+                        TypeQualifiers::CONST
+                    )),
+                    FuncArgs::Undefined
+                ))
             ))
         );
     }
