@@ -326,24 +326,7 @@ pub enum Token {
 }
 
 #[derive(Debug, Clone)]
-pub struct PositionedToken {
-    token: Token,
-    position: Position,
-}
-
-impl PositionedToken {
-    fn new(token: Token, position: Position) -> PositionedToken {
-        PositionedToken { token, position }
-    }
-
-    pub fn token(&self) -> Token {
-        self.token.clone()
-    }
-
-    pub fn position(&self) -> Position {
-        self.position.clone()
-    }
-}
+pub struct PositionedToken(pub Token, pub Position);
 
 pub struct TokenIter<'a> {
     scanner: Peekable<Chars<'a>>,
@@ -863,7 +846,7 @@ impl<'a> Iterator for TokenIter<'a> {
 
     fn next(&mut self) -> Option<Result<PositionedToken, LexError>> {
         if let Some(token) = self.next_token_to_return.take() {
-            return Some(Ok(PositionedToken::new(token, self.position.clone())));
+            return Some(Ok(PositionedToken(token, self.position.clone())));
         }
 
         let mut preprocessing_directive: Option<Vec<Token>> = None;
@@ -918,11 +901,11 @@ impl<'a> Iterator for TokenIter<'a> {
             if let Some(ref mut directive) = preprocessing_directive {
                 directive.push(token);
             } else {
-                break Some(Ok(PositionedToken::new(token, self.position.clone())));
+                break Some(Ok(PositionedToken(token, self.position.clone())));
             }
         };
-        if let Some(Ok(ref valid_token)) = token {
-            self.previous_token = Some(valid_token.token.clone());
+        if let Some(Ok(PositionedToken(ref valid_token, _))) = token {
+            self.previous_token = Some(valid_token.clone());
         }
         token
     }
@@ -938,12 +921,17 @@ mod tests {
         if let Some(_) = iter.next() {
             panic!("Multiple tokens found in {:}", code);
         }
-        token.token
+        match token {
+            PositionedToken(token, _) => token,
+        }
     }
 
     fn parse_valid_tokens(code: &str) -> Vec<Token> {
         let iter = TokenIter::from(code);
-        iter.map(|token| token.unwrap().token).collect()
+        iter.map(|token| match token {
+            Ok(PositionedToken(token, _)) => token,
+            Err(err) => panic!("Error parsing \"{:}\": {:?}", code, err),
+        }).collect()
     }
 
     #[test]

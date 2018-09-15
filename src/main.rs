@@ -20,31 +20,29 @@ where
     I: Iterator<Item = Result<PositionedToken, LexError>>,
 {
     fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, LexError> {
-        let token = self.next_if_lifting_err(|token| match token.token() {
-            Token::Keyword(x) if x == kw => true,
+        let token = self.next_if_lifting_err(|token| match token {
+            PositionedToken(Token::Keyword(x), _) if *x == kw => true,
             _ => false,
         })?;
         Ok(token.is_some())
     }
 
     fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, LexError> {
-        let token = self.next_if_lifting_err(|token| match token.token() {
-            Token::Punctuator(x) if x == punc => true,
+        let token = self.next_if_lifting_err(|token| match token {
+            PositionedToken(Token::Punctuator(x), _) if *x == punc => true,
             _ => false,
         })?;
         Ok(token.is_some())
     }
 
     fn next_if_any_ident(&mut self) -> Result<Option<String>, LexError> {
-        let token = self.next_if_lifting_err(|token| match token.token() {
-            Token::Identifier(_) => true,
+        let token = self.next_if_lifting_err(|token| match token {
+            PositionedToken(Token::Identifier(_), _) => true,
             _ => false,
         })?;
         match token {
-            Some(token) => match token.token() {
-                Token::Identifier(ident) => Ok(Some(ident)),
-                _ => unreachable!(),
-            },
+            Some(PositionedToken(Token::Identifier(ident), _)) => Ok(Some(ident)),
+            Some(_) => unreachable!(),
             None => Ok(None),
         }
     }
@@ -189,19 +187,21 @@ impl<'a> Parser<'a> {
             return Ok(Some(Type::Primitive(prim)));
         }
         let token = match self.iter.peek() {
-            Some(Ok(token)) => token,
+            Some(Ok(PositionedToken(token, _))) => token.clone(),
             Some(Err(_)) => {
                 let err = self.iter.next().unwrap().err().unwrap().into();
                 return Err(err);
             }
             None => return Ok(None),
         };
-        match token.token() {
-            Token::Identifier(identifier) => if self.is_type_name(identifier.as_ref()) {
-                panic!("TODO")
-            } else {
-                Ok(None)
-            },
+        match token {
+            Token::Identifier(identifier) => {
+                if self.is_type_name(identifier.as_ref()) {
+                    panic!("TODO")
+                } else {
+                    Ok(None)
+                }
+            }
             Token::Keyword(Keyword::Int) => {
                 self.iter.next();
                 Ok(Some(Type::Primitive(PrimitiveType::Int)))
@@ -292,10 +292,10 @@ impl<'a> Parser<'a> {
 
     fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
         match self.iter.next() {
-            Some(Ok(token)) => if token.token() == expected_token {
+            Some(Ok(PositionedToken(token, position))) => if token == expected_token {
                 Ok(())
             } else {
-                Err(ParseError::UnexpectedToken(token.token(), token.position()))
+                Err(ParseError::UnexpectedToken(token, position))
             },
             Some(Err(err)) => Err(err.into()),
             None => Err(ParseError::ExpectingToken(expected_token)),
