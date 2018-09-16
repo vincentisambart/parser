@@ -7,7 +7,6 @@ use crate::lex::{Keyword, LexError, Position, PositionedToken, Punctuator, Token
 use crate::scan::Peeking;
 use std::collections::HashMap;
 use std::iter::Peekable;
-use std::rc::Rc;
 
 trait PeekingToken {
     fn advance_if_kw(&mut self, kw: Keyword) -> bool;
@@ -98,7 +97,7 @@ struct FunctionType(QualifiedType, FunctionParameters);
 enum QualifiableType {
     Prim(PrimitiveType),
     Ptr(Box<DefinableType>),
-    Custom(String, Rc<DefinableType>),
+    Custom(String, Box<DefinableType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +118,7 @@ enum FunctionParameters {
 #[derive(Debug, Clone, PartialEq)]
 enum ExternalDecl {
     Decl(String, DefinableType),
+    TypeDef(String, DefinableType),
     Nothing,
 }
 
@@ -137,7 +137,7 @@ impl From<LexError> for ParseError {
 
 struct Parser<I: Iterator<Item = PositionedToken>> {
     iter: Peekable<I>,
-    types_stack: Vec<HashMap<String, Rc<DefinableType>>>,
+    types_stack: Vec<HashMap<String, DefinableType>>,
 }
 
 impl Parser<std::vec::IntoIter<PositionedToken>> {
@@ -161,11 +161,11 @@ where
     fn from(iter: I) -> Parser<I> {
         Parser {
             iter: iter.peekable(),
-            types_stack: Vec::new(),
+            types_stack: vec![HashMap::new()],
         }
     }
 
-    fn type_by_name(&self, name: &str) -> Option<Rc<DefinableType>> {
+    fn type_by_name(&self, name: &str) -> Option<DefinableType> {
         for types in self.types_stack.iter().rev() {
             if let Some(ty) = types.get(name) {
                 return Some(ty.clone());
@@ -317,6 +317,7 @@ where
         if self.iter.peek().is_none() {
             return Ok(None);
         }
+        let is_typedef = self.iter.advance_if_kw(Keyword::Typedef);
         let base_qual_ty = {
             let mut qualifiers = TypeQualifiers::empty();
             while let Some(qualifier) = self.read_type_qualifier() {
@@ -392,13 +393,26 @@ where
                         DefinableType::Func(FunctionType(qual_ty, func_args))
                     }
                     DefinableType::Array(_) | DefinableType::Func(_) => {
-                        panic!("you can't return an array or func - TODO: proper error")
+                        panic!("You can't return an array or func - TODO: proper error")
                     }
                 };
             }
         }
 
-        Ok(Some(ExternalDecl::Decl(ident, def_ty)))
+        if is_typedef {
+            let scope_types = self.types_stack.last_mut().unwrap();
+            if let Some(existing) = scope_types.get(&ident) {
+                // TODO: Should be a comparison of the type with all custom types expanded.
+                if *existing != def_ty {
+                    panic!("A typedef cannot redefine an already defined type on the same scope - TODO: proper error");
+                }
+            } else {
+                scope_types.insert(ident.clone(), def_ty.clone());
+            }
+            Ok(Some(ExternalDecl::TypeDef(ident, def_ty)))
+        } else {
+            Ok(Some(ExternalDecl::Decl(ident, def_ty)))
+        }
     }
 }
 
@@ -637,6 +651,23 @@ mod tests {
                     ptr(DefinableType::Qual(QualifiedType(
                         QualifiableType::Prim(PrimitiveType::Char),
                         TypeQualifiers::CONST
+                    ))),
+                    FunctionParameters::Undefined
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn test_simple_type_definition() {
+        assert_eq!(
+            parse_one_external_declaration(r#"typedef signed *truc();"#),
+            Some(ExternalDecl::TypeDef(
+                "truc".to_string(),
+                DefinableType::Func(FunctionType(
+                    ptr(DefinableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
                     ))),
                     FunctionParameters::Undefined
                 ))
