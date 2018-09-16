@@ -338,9 +338,13 @@ where
         panic!("TODO: Handle parameters")
     }
 
-    fn read_next_external_declaration(&mut self) -> Result<Option<ExternalDecl>, ParseError> {
+    // TODO:
+    // - Should maybe be a normal iterator
+    // - It's hard to understand the difference between empty Vec and a Vec with Nothing
+    fn read_next_external_declaration(&mut self) -> Result<Vec<ExternalDecl>, ParseError> {
+        let mut decls = Vec::new();
         if self.iter.peek().is_none() {
-            return Ok(None);
+            return Ok(decls);
         }
         let is_typedef = self.iter.advance_if_kw(Keyword::Typedef);
         let base_qual_ty = {
@@ -356,117 +360,109 @@ where
             }
             QualifiedType(ty, qualifiers)
         };
-        let mut ptr_qualifs = Vec::new();
-        let mut ptr_qualifs_stack = Vec::new();
-        let ident = loop {
-            if self.iter.advance_if_punc(Punctuator::Star) {
-                let mut qualifiers = TypeQualifiers::empty();
-                while let Some(qualifier) = self.read_type_qualifier() {
-                    qualifiers |= qualifier;
-                }
-                ptr_qualifs.push(qualifiers);
-            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
-                ptr_qualifs_stack.push(ptr_qualifs);
-                ptr_qualifs = Vec::new();
-            } else if let Some(ident) = self.iter.next_if_any_ident() {
-                ptr_qualifs_stack.push(ptr_qualifs);
-                break ident;
-            } else if self.iter.advance_if_punc(Punctuator::Semicolon) {
-                if !ptr_qualifs_stack.is_empty() {
-                    panic!("TODO");
-                }
-                return Ok(Some(ExternalDecl::Nothing));
-            } else {
-                self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
-            }
-        };
-        let mut ptr_qualifs_reversed_stack = Vec::new();
+
+        if self.iter.advance_if_punc(Punctuator::Semicolon) {
+            decls.push(ExternalDecl::Nothing);
+            return Ok(decls);
+        }
+
         loop {
-            let ptr_qualifs = if let Some(ptr_qualifs) = ptr_qualifs_stack.pop() {
-                ptr_qualifs
-            } else {
-                panic!("TODO: Incorrect decl");
-            };
-            if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
-                let func_args = self.read_func_args()?;
-                ptr_qualifs_reversed_stack.push((ptr_qualifs, Some(func_args)));
-            } else {
-                ptr_qualifs_reversed_stack.push((ptr_qualifs, None));
-            }
-            if ptr_qualifs_stack.is_empty() {
-                break;
-            } else {
-                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
-            }
-        }
-        assert!(ptr_qualifs_stack.is_empty());
-        drop(ptr_qualifs_stack);
-
-        self.expect_token(Token::Punctuator(Punctuator::Semicolon))?;
-
-        let mut def_ty = DefinableType::Qual(base_qual_ty);
-        while let Some((ptr_qualifs, func_args)) = ptr_qualifs_reversed_stack.pop() {
-            for qualifiers in ptr_qualifs {
-                def_ty = DefinableType::Qual(QualifiedType(
-                    QualifiableType::Ptr(Box::new(def_ty)),
-                    qualifiers,
-                ));
-            }
-            if let Some(func_args) = func_args {
-                def_ty = match def_ty {
-                    DefinableType::Qual(qual_ty) => {
-                        DefinableType::Func(FunctionType(qual_ty, func_args))
+            let mut ptr_qualifs = Vec::new();
+            let mut ptr_qualifs_stack = Vec::new();
+            let ident = loop {
+                if self.iter.advance_if_punc(Punctuator::Star) {
+                    let mut qualifiers = TypeQualifiers::empty();
+                    while let Some(qualifier) = self.read_type_qualifier() {
+                        qualifiers |= qualifier;
                     }
-                    DefinableType::Array(_) | DefinableType::Func(_) => {
-                        panic!("You can't return an array or func - TODO: proper error")
-                    }
-                };
-            }
-        }
-
-        if is_typedef {
-            if let Some(existing) = self.type_manager.type_in_current_scope(ident.as_ref()) {
-                // TODO: Should be a comparison of the type with all custom types expanded.
-                if *existing != def_ty {
-                    panic!("A typedef cannot redefine an already defined type on the same scope - TODO: proper error");
+                    ptr_qualifs.push(qualifiers);
+                } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
+                    ptr_qualifs_stack.push(ptr_qualifs);
+                    ptr_qualifs = Vec::new();
+                } else if let Some(ident) = self.iter.next_if_any_ident() {
+                    ptr_qualifs_stack.push(ptr_qualifs);
+                    break ident;
+                } else {
+                    panic!("TODO: Incorrect decl");
                 }
-            } else {
-                self.type_manager
-                    .add_type_to_current_scope(ident.clone(), def_ty.clone());
+            };
+            let mut ptr_qualifs_reversed_stack = Vec::new();
+            loop {
+                let ptr_qualifs = if let Some(ptr_qualifs) = ptr_qualifs_stack.pop() {
+                    ptr_qualifs
+                } else {
+                    panic!("TODO: Incorrect decl");
+                };
+                if self.iter.advance_if_punc(Punctuator::LeftParenthesis) {
+                    let func_args = self.read_func_args()?;
+                    ptr_qualifs_reversed_stack.push((ptr_qualifs, Some(func_args)));
+                } else {
+                    ptr_qualifs_reversed_stack.push((ptr_qualifs, None));
+                }
+                if ptr_qualifs_stack.is_empty() {
+                    break;
+                } else {
+                    self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                }
             }
-            Ok(Some(ExternalDecl::TypeDef(ident, def_ty)))
-        } else {
-            Ok(Some(ExternalDecl::Decl(ident, def_ty)))
+            assert!(ptr_qualifs_stack.is_empty());
+            drop(ptr_qualifs_stack);
+
+            let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
+            while let Some((ptr_qualifs, func_args)) = ptr_qualifs_reversed_stack.pop() {
+                for qualifiers in ptr_qualifs {
+                    def_ty = DefinableType::Qual(QualifiedType(
+                        QualifiableType::Ptr(Box::new(def_ty)),
+                        qualifiers,
+                    ));
+                }
+                if let Some(func_args) = func_args {
+                    def_ty = match def_ty {
+                        DefinableType::Qual(qual_ty) => {
+                            DefinableType::Func(FunctionType(qual_ty, func_args))
+                        }
+                        DefinableType::Array(_) | DefinableType::Func(_) => {
+                            panic!("You can't return an array or func - TODO: proper error")
+                        }
+                    };
+                }
+            }
+
+            if is_typedef {
+                if let Some(existing) = self.type_manager.type_in_current_scope(ident.as_ref()) {
+                    // TODO: Should be a comparison of the type with all custom types expanded.
+                    if *existing != def_ty {
+                        panic!("A typedef cannot redefine an already defined type on the same scope - TODO: proper error");
+                    }
+                } else {
+                    self.type_manager
+                        .add_type_to_current_scope(ident.clone(), def_ty.clone());
+                }
+                decls.push(ExternalDecl::TypeDef(ident, def_ty))
+            } else {
+                decls.push(ExternalDecl::Decl(ident, def_ty))
+            }
+
+            match self.iter.next() {
+                Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _)) => break,
+                Some(PositionedToken(Token::Punctuator(Punctuator::Comma), _)) => (),
+                Some(PositionedToken(token, position)) => {
+                    return Err(ParseError::UnexpectedToken(token, position))
+                }
+                None => {
+                    return Err(ParseError::ExpectingToken(Token::Punctuator(
+                        Punctuator::Semicolon,
+                    )))
+                }
+            }
         }
+        Ok(decls)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
-        let mut parser = match Parser::from_code(code) {
-            Ok(parser) => parser,
-            Err(err) => panic!(r#"Unexpected lexer error {:?} for "{:}""#, err, code),
-        };
-        let decl = match parser.read_next_external_declaration() {
-            Ok(Some(decl)) => decl,
-            Ok(None) => return None,
-            Err(err) => panic!(r#"Unexpected error {:?} for "{:}""#, err, code),
-        };
-        match parser.read_next_external_declaration() {
-            Ok(None) => Some(decl),
-            Ok(Some(another)) => panic!(
-                r#"Unexpected {:?} after {:?} for "{:}""#,
-                another, decl, code
-            ),
-            Err(err) => panic!(
-                r#"Unexpected error {:?} after {:?} for "{:}""#,
-                err, decl, code
-            ),
-        }
-    }
 
     fn parse_external_declarations(code: &str) -> Vec<ExternalDecl> {
         let mut parser = match Parser::from_code(code) {
@@ -476,12 +472,26 @@ mod tests {
         let mut decls = Vec::new();
         loop {
             match parser.read_next_external_declaration() {
-                Ok(Some(decl)) => decls.push(decl),
-                Ok(None) => break,
+                Ok(mut new_decls) => if new_decls.is_empty() {
+                    break;
+                } else {
+                    decls.append(&mut new_decls);
+                },
                 Err(err) => panic!(r#"Unexpected error {:?} for "{:}""#, err, code),
             };
         }
         decls
+    }
+
+    fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
+        let decls = parse_external_declarations(code);
+        if decls.len() > 1 {
+            panic!(
+                r#"Unexpected {:?} after {:?} for "{:}""#,
+                decls[1], decls[0], code
+            );
+        }
+        decls.into_iter().next()
     }
 
     fn qual_ptr(to: DefinableType, qualifiers: TypeQualifiers) -> QualifiedType {
@@ -738,7 +748,52 @@ mod tests {
                     ))
                 )
             ],
-        )
+        );
+        assert_eq!(
+            parse_external_declarations(r#"typedef int i, *ptr; ptr foo, *bar;"#),
+            vec![
+                ExternalDecl::TypeDef(
+                    "i".to_string(),
+                    DefinableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    )),
+                ),
+                ExternalDecl::TypeDef(
+                    "ptr".to_string(),
+                    def_ptr(DefinableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    ))),
+                ),
+                ExternalDecl::Decl(
+                    "foo".to_string(),
+                    DefinableType::Qual(QualifiedType(
+                        QualifiableType::Custom(
+                            "ptr".to_string(),
+                            Box::new(def_ptr(DefinableType::Qual(QualifiedType(
+                                QualifiableType::Prim(PrimitiveType::Int),
+                                TypeQualifiers::empty()
+                            ))))
+                        ),
+                        TypeQualifiers::empty()
+                    ))
+                ),
+                ExternalDecl::Decl(
+                    "bar".to_string(),
+                    def_ptr(DefinableType::Qual(QualifiedType(
+                        QualifiableType::Custom(
+                            "ptr".to_string(),
+                            Box::new(def_ptr(DefinableType::Qual(QualifiedType(
+                                QualifiableType::Prim(PrimitiveType::Int),
+                                TypeQualifiers::empty()
+                            ))))
+                        ),
+                        TypeQualifiers::empty()
+                    )))
+                )
+            ]
+        );
     }
 }
 
