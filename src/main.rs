@@ -135,9 +135,50 @@ impl From<LexError> for ParseError {
     }
 }
 
+struct TypeManager {
+    types_stack: Vec<HashMap<String, DefinableType>>,
+}
+
+impl TypeManager {
+    fn new() -> TypeManager {
+        TypeManager {
+            types_stack: vec![HashMap::new()],
+        }
+    }
+
+    fn type_in_current_scope(&self, name: &str) -> Option<&DefinableType> {
+        self.types_stack.last().unwrap().get(name)
+    }
+
+    fn add_type_to_current_scope(&mut self, name: String, ty: DefinableType) {
+        if self
+            .types_stack
+            .last_mut()
+            .unwrap()
+            .insert(name, ty)
+            .is_some()
+        {
+            panic!("You should not redefine a type already defined in the current scope");
+        }
+    }
+
+    fn type_by_name(&self, name: &str) -> Option<&DefinableType> {
+        for types in self.types_stack.iter().rev() {
+            if let Some(ty) = types.get(name) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    fn is_type_name(&self, name: &str) -> bool {
+        self.type_by_name(name).is_some()
+    }
+}
+
 struct Parser<I: Iterator<Item = PositionedToken>> {
     iter: Peekable<I>,
-    types_stack: Vec<HashMap<String, DefinableType>>,
+    type_manager: TypeManager,
 }
 
 impl Parser<std::vec::IntoIter<PositionedToken>> {
@@ -161,21 +202,8 @@ where
     fn from(iter: I) -> Parser<I> {
         Parser {
             iter: iter.peekable(),
-            types_stack: vec![HashMap::new()],
+            type_manager: TypeManager::new(),
         }
-    }
-
-    fn type_by_name(&self, name: &str) -> Option<DefinableType> {
-        for types in self.types_stack.iter().rev() {
-            if let Some(ty) = types.get(name) {
-                return Some(ty.clone());
-            }
-        }
-        None
-    }
-
-    fn is_type_name(&self, name: &str) -> bool {
-        self.type_by_name(name).is_some()
     }
 
     fn read_type_qualifier(&mut self) -> Option<TypeQualifiers> {
@@ -196,21 +224,18 @@ where
         if let Some(prim) = self.read_primitive_type() {
             return Some(QualifiableType::Prim(prim));
         };
-        match self.iter.peek() {
-            Some(PositionedToken(Token::Identifier(identifier), _)) => {
-                // TODO: Clone should not be needed (moving is_type_name to another struct might do the trick)
-                let copy = identifier.clone();
-                if self.is_type_name(copy.as_ref()) {
-                    panic!("TODO")
-                } else {
-                    None
+        let type_manager = &self.type_manager;
+        if let Some(PositionedToken(Token::Identifier(ident), _)) =
+            self.iter.next_if(|token| match token {
+                PositionedToken(Token::Identifier(ident), _) => {
+                    type_manager.is_type_name(ident.as_ref())
                 }
-            }
-            Some(PositionedToken(Token::Keyword(Keyword::Int), _)) => {
-                self.iter.next();
-                Some(QualifiableType::Prim(PrimitiveType::Int))
-            }
-            _ => None,
+                _ => false,
+            }) {
+            let ty = type_manager.type_by_name(ident.as_ref()).unwrap().clone();
+            Some(QualifiableType::Custom(ident, Box::new(ty)))
+        } else {
+            None
         }
     }
 
@@ -400,14 +425,14 @@ where
         }
 
         if is_typedef {
-            let scope_types = self.types_stack.last_mut().unwrap();
-            if let Some(existing) = scope_types.get(&ident) {
+            if let Some(existing) = self.type_manager.type_in_current_scope(ident.as_ref()) {
                 // TODO: Should be a comparison of the type with all custom types expanded.
                 if *existing != def_ty {
                     panic!("A typedef cannot redefine an already defined type on the same scope - TODO: proper error");
                 }
             } else {
-                scope_types.insert(ident.clone(), def_ty.clone());
+                self.type_manager
+                    .add_type_to_current_scope(ident.clone(), def_ty.clone());
             }
             Ok(Some(ExternalDecl::TypeDef(ident, def_ty)))
         } else {
@@ -441,6 +466,22 @@ mod tests {
                 err, decl, code
             ),
         }
+    }
+
+    fn parse_external_declarations(code: &str) -> Vec<ExternalDecl> {
+        let mut parser = match Parser::from_code(code) {
+            Ok(parser) => parser,
+            Err(err) => panic!(r#"Unexpected lexer error {:?} for "{:}""#, err, code),
+        };
+        let mut decls = Vec::new();
+        loop {
+            match parser.read_next_external_declaration() {
+                Ok(Some(decl)) => decls.push(decl),
+                Ok(None) => break,
+                Err(err) => panic!(r#"Unexpected error {:?} for "{:}""#, err, code),
+            };
+        }
+        decls
     }
 
     fn qual_ptr(to: DefinableType, qualifiers: TypeQualifiers) -> QualifiedType {
@@ -673,6 +714,31 @@ mod tests {
                 ))
             ))
         );
+        assert_eq!(
+            parse_external_declarations(r#"typedef int *ptr; const ptr foo;"#),
+            vec![
+                ExternalDecl::TypeDef(
+                    "ptr".to_string(),
+                    def_ptr(DefinableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    ))),
+                ),
+                ExternalDecl::Decl(
+                    "foo".to_string(),
+                    DefinableType::Qual(QualifiedType(
+                        QualifiableType::Custom(
+                            "ptr".to_string(),
+                            Box::new(def_ptr(DefinableType::Qual(QualifiedType(
+                                QualifiableType::Prim(PrimitiveType::Int),
+                                TypeQualifiers::empty()
+                            ))))
+                        ),
+                        TypeQualifiers::CONST
+                    ))
+                )
+            ],
+        )
     }
 }
 
