@@ -103,6 +103,16 @@ pub trait VarRateFailableIterator {
         }
         Ok(vec)
     }
+
+    fn fixed_rate(self) -> FixedRateFailableIterator<Self>
+    where
+        Self: Sized,
+    {
+        FixedRateFailableIterator {
+            iter: self,
+            previous: None,
+        }
+    }
 }
 
 // An adapter from VarRateFailableIterator to a normal (fixed rate) FailableIterator.
