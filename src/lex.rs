@@ -47,7 +47,7 @@ pub enum IntegerRepr {
 }
 
 impl IntegerRepr {
-    pub fn radix(&self) -> u32 {
+    pub fn radix(self) -> u32 {
         match self {
             IntegerRepr::Dec => 10,
             IntegerRepr::Hex => 16,

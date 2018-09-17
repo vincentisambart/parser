@@ -124,10 +124,7 @@ struct FunctionParameter(Option<String>, ContainableType);
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FunctionParameters {
     Undefined,
-    Defined {
-        params: Vec<FunctionParameter>,
-        variable: bool,
-    },
+    Defined(Vec<FunctionParameter>, bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -356,8 +353,22 @@ impl<'a> Parser<'a> {
     // Should be called just after having read an opening parenthesis.
     fn read_func_params(&mut self) -> Result<FunctionParameters, ParseError> {
         if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+            // foo(void) means undefined number of parameters
             return Ok(FunctionParameters::Undefined);
         }
+        let base_qual_ty = self.read_qual_base_type()?;
+        match base_qual_ty {
+            Some(QualifiedType(QualifiableType::Prim(PrimitiveType::Void), qualifiers))
+                if qualifiers.is_empty() =>
+            {
+                if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+                    // foo(void) means no parameter
+                    return Ok(FunctionParameters::Defined(Vec::new(), false));
+                }
+            }
+            _ => (),
+        }
+
         // TODO: Handle parameters
         panic!("TODO: Handle parameters")
     }
@@ -449,10 +460,12 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
             return Ok(None);
         }
         let is_typedef = self.iter.advance_if_kw(Keyword::Typedef)?;
-        let base_qual_ty = self.read_qual_base_type()?.unwrap_or(QualifiedType(
-            QualifiableType::Prim(PrimitiveType::Int),
-            TypeQualifiers::empty(),
-        ));
+        let base_qual_ty = self.read_qual_base_type()?.unwrap_or_else(|| {
+            QualifiedType(
+                QualifiableType::Prim(PrimitiveType::Int),
+                TypeQualifiers::empty(),
+            )
+        });
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             return Ok(Some(Vec::new().into_iter()));
@@ -693,6 +706,19 @@ mod tests {
                         TypeQualifiers::empty()
                     ),
                     FunctionParameters::Undefined
+                ))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"void foo(void);"#),
+            Some(ExternalDecl::Decl(
+                "foo".to_string(),
+                DefinableType::Func(FunctionType(
+                    QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    FunctionParameters::Defined(vec![], false)
                 ))
             ))
         );
