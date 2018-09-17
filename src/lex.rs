@@ -46,6 +46,16 @@ pub enum IntegerRepr {
     Oct,
 }
 
+impl IntegerRepr {
+    pub fn radix(&self) -> u32 {
+        match self {
+            IntegerRepr::Dec => 10,
+            IntegerRepr::Hex => 16,
+            IntegerRepr::Oct => 8,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatRepr {
     Dec,

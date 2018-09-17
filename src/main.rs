@@ -1,5 +1,6 @@
-// Notes
+// TODO:
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
+// - Move tests to one (or multiple) other files
 mod failable;
 mod lex;
 mod peeking;
@@ -82,20 +83,11 @@ bitflags! {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ArrayType();
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum DefinableType {
     Func(FunctionType),
     Qual(QualifiedType),
     Array(ArrayType),
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ContainableType {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FunctionType(QualifiedType, FunctionParameters);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum QualifiableType {
@@ -106,6 +98,24 @@ enum QualifiableType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QualifiedType(QualifiableType, TypeQualifiers);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContainableType {
+    Qual(QualifiedType),
+    Array(ArrayType),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ArraySize {
+    Unspecified,
+    Fixed(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArrayType(ArraySize, Box<ContainableType>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionType(QualifiedType, FunctionParameters);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionParameter(Option<String>, ContainableType);
@@ -130,6 +140,7 @@ pub enum ParseError {
     LexError(LexError),
     ExpectingToken(Token), // TODO: Should have position
     UnexpectedToken(Token, Position),
+    UnexpectedEOF,
 }
 
 impl From<LexError> for ParseError {
@@ -318,6 +329,7 @@ impl<'a> Parser<'a> {
             Some(PositionedToken(token, position)) => if token == expected_token {
                 Ok(())
             } else {
+                eprintln!("expecting {:?}, got {:?}", expected_token, token);
                 Err(ParseError::UnexpectedToken(token, position))
             },
             None => Err(ParseError::ExpectingToken(expected_token)),
@@ -331,6 +343,25 @@ impl<'a> Parser<'a> {
         }
         // TODO: Handle parameters
         panic!("TODO: Handle parameters")
+    }
+
+    // Should be called just after having read an opening square bracket.
+    fn read_array_size(&mut self) -> Result<ArraySize, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::RightSquareBracket)? {
+            return Ok(ArraySize::Unspecified);
+        }
+
+        match self.iter.next()? {
+            Some(PositionedToken(Token::IntegerLiteral(literal, repr, _), _)) => {
+                let size = u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap();
+                self.expect_token(Token::Punctuator(Punctuator::RightSquareBracket))?;
+                Ok(ArraySize::Fixed(size))
+            }
+            Some(PositionedToken(token, position)) => {
+                Err(ParseError::UnexpectedToken(token, position))
+            }
+            None => Err(ParseError::UnexpectedEOF),
+        }
     }
 }
 
@@ -391,12 +422,17 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
                 } else {
                     panic!("TODO: Incorrect decl");
                 };
+                let func_args;
                 if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                    let func_args = self.read_func_args()?;
-                    ptr_qualifs_reversed_stack.push((ptr_qualifs, Some(func_args)));
+                    func_args = Some(self.read_func_args()?);
                 } else {
-                    ptr_qualifs_reversed_stack.push((ptr_qualifs, None));
+                    func_args = None;
                 }
+                let mut array_sizes = Vec::new();
+                while self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
+                    array_sizes.push(self.read_array_size()?);
+                }
+                ptr_qualifs_reversed_stack.push((ptr_qualifs, func_args, array_sizes));
                 if ptr_qualifs_stack.is_empty() {
                     break;
                 } else {
@@ -407,7 +443,8 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
             drop(ptr_qualifs_stack);
 
             let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
-            while let Some((ptr_qualifs, func_args)) = ptr_qualifs_reversed_stack.pop() {
+            while let Some((ptr_qualifs, func_args, array_sizes)) = ptr_qualifs_reversed_stack.pop()
+            {
                 for qualifiers in ptr_qualifs {
                     def_ty = DefinableType::Qual(QualifiedType(
                         QualifiableType::Ptr(Box::new(def_ty)),
@@ -421,6 +458,21 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
                         }
                         DefinableType::Array(_) | DefinableType::Func(_) => {
                             panic!("You can't return an array or func - TODO: proper error")
+                        }
+                    };
+                }
+                for array_size in array_sizes.into_iter().rev() {
+                    def_ty = match def_ty {
+                        DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
+                            array_size,
+                            Box::new(ContainableType::Qual(qual_ty)),
+                        )),
+                        DefinableType::Array(array_ty) => DefinableType::Array(ArrayType(
+                            array_size,
+                            Box::new(ContainableType::Array(array_ty)),
+                        )),
+                        DefinableType::Func(_) => {
+                            panic!("You can't have an array of funcs - TODO: proper error")
                         }
                     };
                 }
@@ -607,6 +659,10 @@ mod tests {
                 )
             ))
         );
+    }
+
+    #[test]
+    fn test_parse_function_declaration() {
         assert_eq!(
             parse_one_external_declaration(r#"foo();"#),
             Some(ExternalDecl::Decl(
@@ -620,6 +676,10 @@ mod tests {
                 ))
             ))
         );
+    }
+
+    #[test]
+    fn test_parse_function_pointer_declaration() {
         assert_eq!(
             parse_one_external_declaration(r#"int (*foo)();"#),
             Some(ExternalDecl::Decl(
@@ -688,6 +748,69 @@ mod tests {
                         TypeQualifiers::CONST
                     ))),
                     FunctionParameters::Undefined
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_array_declaration() {
+        assert_eq!(
+            parse_one_external_declaration(r#"int foo[10];"#),
+            Some(ExternalDecl::Decl(
+                "foo".to_string(),
+                DefinableType::Array(ArrayType(
+                    ArraySize::Fixed(10),
+                    Box::new(ContainableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    )))
+                ))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"char foo[1][3];"#),
+            Some(ExternalDecl::Decl(
+                "foo".to_string(),
+                DefinableType::Array(ArrayType(
+                    ArraySize::Fixed(1),
+                    Box::new(ContainableType::Array(ArrayType(
+                        ArraySize::Fixed(3),
+                        Box::new(ContainableType::Qual(QualifiedType(
+                            QualifiableType::Prim(PrimitiveType::Char),
+                            TypeQualifiers::empty()
+                        )))
+                    )))
+                ))
+            ))
+        );
+        assert_eq!(
+            // TODO: Unspecified size arrays should only be used in function parameters
+            parse_one_external_declaration(r#"short foo[];"#),
+            Some(ExternalDecl::Decl(
+                "foo".to_string(),
+                DefinableType::Array(ArrayType(
+                    ArraySize::Unspecified,
+                    Box::new(ContainableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Short),
+                        TypeQualifiers::empty()
+                    )))
+                ))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"char *(*abcdef[3])();"#),
+            Some(ExternalDecl::Decl(
+                "abcdef".to_string(),
+                DefinableType::Array(ArrayType(
+                    ArraySize::Fixed(3),
+                    Box::new(ContainableType::Qual(func_ptr(
+                        ptr(DefinableType::Qual(QualifiedType(
+                            QualifiableType::Prim(PrimitiveType::Char),
+                            TypeQualifiers::empty()
+                        ))),
+                        FunctionParameters::Undefined
+                    )))
                 ))
             ))
         );
