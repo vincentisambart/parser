@@ -6,7 +6,7 @@
 // - handle more preprocessing directives (#error, unknown #pragma should be an error...)
 // - merge succession of string literals into one
 
-use crate::scan::Peeking;
+use crate::peeking::Peeking;
 use lazy_static::lazy_static;
 use std::char;
 use std::collections::HashMap;
