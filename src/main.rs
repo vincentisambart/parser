@@ -1,6 +1,7 @@
 // TODO:
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Move tests to one (or multiple) other files
+// - Add position to declarations
 mod failable;
 mod lex;
 mod peeking;
@@ -190,6 +191,22 @@ impl TypeManager {
     }
 }
 
+struct DeclaratorParenLevel {
+    ptr_qualifs: Vec<TypeQualifiers>,
+    func_params: Option<FunctionParameters>,
+    array_sizes: Vec<ArraySize>,
+}
+
+impl DeclaratorParenLevel {
+    fn new() -> DeclaratorParenLevel {
+        DeclaratorParenLevel {
+            ptr_qualifs: Vec::new(),
+            func_params: None,
+            array_sizes: Vec::new(),
+        }
+    }
+}
+
 struct Parser<'a> {
     iter: FailablePeekable<TokenIter<'a>>,
     type_manager: TypeManager,
@@ -363,21 +380,62 @@ impl<'a> Parser<'a> {
             None => Err(ParseError::UnexpectedEOF),
         }
     }
-}
 
-struct TypeDeclParenLevel {
-    ptr_qualifs: Vec<TypeQualifiers>,
-    func_params: Option<FunctionParameters>,
-    array_sizes: Vec<ArraySize>,
-}
-
-impl TypeDeclParenLevel {
-    fn new() -> TypeDeclParenLevel {
-        TypeDeclParenLevel {
-            ptr_qualifs: Vec::new(),
-            func_params: None,
-            array_sizes: Vec::new(),
+    fn read_declarator(
+        &mut self,
+    ) -> Result<(Option<String>, Vec<DeclaratorParenLevel>), ParseError> {
+        let mut levels = Vec::new();
+        let mut current_level = DeclaratorParenLevel::new();
+        let ident = loop {
+            if self.iter.advance_if_punc(Punctuator::Star)? {
+                let mut qualifiers = TypeQualifiers::empty();
+                while let Some(qualifier) = self.read_type_qualifier()? {
+                    qualifiers |= qualifier;
+                }
+                current_level.ptr_qualifs.push(qualifiers);
+            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                levels.push(current_level);
+                current_level = DeclaratorParenLevel::new();
+            } else {
+                levels.push(current_level);
+                break self.iter.next_if_any_ident()?;
+            }
+        };
+        for (i, level) in levels.iter_mut().enumerate().rev() {
+            if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                level.func_params = Some(self.read_func_params()?);
+            }
+            while self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
+                level.array_sizes.push(self.read_array_size()?);
+            }
+            if i != 0 {
+                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+            }
         }
+        Ok((ident, levels))
+    }
+
+    fn read_qual_base_type(&mut self) -> Result<Option<QualifiedType>, ParseError> {
+        let mut qualifiers = TypeQualifiers::empty();
+        while let Some(qualifier) = self.read_type_qualifier()? {
+            qualifiers |= qualifier;
+        }
+        let base_ty = self.read_base_type()?;
+        while let Some(qualifier) = self.read_type_qualifier()? {
+            qualifiers |= qualifier;
+        }
+        let base_ty = match base_ty {
+            Some(ty) => Some(QualifiedType(ty, qualifiers)),
+            None => if qualifiers.is_empty() {
+                None
+            } else {
+                Some(QualifiedType(
+                    QualifiableType::Prim(PrimitiveType::Int),
+                    qualifiers,
+                ))
+            },
+        };
+        Ok(base_ty)
     }
 }
 
@@ -391,19 +449,10 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
             return Ok(None);
         }
         let is_typedef = self.iter.advance_if_kw(Keyword::Typedef)?;
-        let base_qual_ty = {
-            let mut qualifiers = TypeQualifiers::empty();
-            while let Some(qualifier) = self.read_type_qualifier()? {
-                qualifiers |= qualifier;
-            }
-            let ty = self
-                .read_base_type()?
-                .unwrap_or(QualifiableType::Prim(PrimitiveType::Int));
-            while let Some(qualifier) = self.read_type_qualifier()? {
-                qualifiers |= qualifier;
-            }
-            QualifiedType(ty, qualifiers)
-        };
+        let base_qual_ty = self.read_qual_base_type()?.unwrap_or(QualifiedType(
+            QualifiableType::Prim(PrimitiveType::Int),
+            TypeQualifiers::empty(),
+        ));
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
             return Ok(Some(Vec::new().into_iter()));
@@ -411,36 +460,8 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
 
         let mut decls = Vec::new();
         loop {
-            let mut levels = Vec::new();
-            let mut current_level = TypeDeclParenLevel::new();
-            let ident = loop {
-                if self.iter.advance_if_punc(Punctuator::Star)? {
-                    let mut qualifiers = TypeQualifiers::empty();
-                    while let Some(qualifier) = self.read_type_qualifier()? {
-                        qualifiers |= qualifier;
-                    }
-                    current_level.ptr_qualifs.push(qualifiers);
-                } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                    levels.push(current_level);
-                    current_level = TypeDeclParenLevel::new();
-                } else if let Some(ident) = self.iter.next_if_any_ident()? {
-                    levels.push(current_level);
-                    break ident;
-                } else {
-                    panic!("TODO: Incorrect decl");
-                }
-            };
-            for (i, level) in levels.iter_mut().enumerate().rev() {
-                if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                    level.func_params = Some(self.read_func_params()?);
-                }
-                while self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
-                    level.array_sizes.push(self.read_array_size()?);
-                }
-                if i != 0 {
-                    self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
-                }
-            }
+            let (ident, levels) = self.read_declarator()?;
+            let ident = ident.expect("A decl should have an identifier - TODO: proper error");
 
             let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
             for level in levels {
