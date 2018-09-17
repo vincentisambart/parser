@@ -1,4 +1,4 @@
-/// An iterator-like trait for which next and fail.
+/// An iterator-like trait for which next can fail.
 pub trait FailableIterator {
     type Item;
     type Error;
@@ -13,6 +13,17 @@ pub trait FailableIterator {
             iter: self,
             peeked: None,
         }
+    }
+
+    fn collect(mut self) -> Result<Vec<Self::Item>, Self::Error>
+    where
+        Self: Sized,
+    {
+        let mut vec = Vec::new();
+        while let Some(item) = self.next()? {
+            vec.push(item);
+        }
+        Ok(vec)
     }
 }
 
@@ -77,6 +88,21 @@ pub trait VarRateFailableIterator {
     type VarRateItemsIter: Iterator<Item = Self::Item>;
 
     fn next(&mut self) -> Result<Option<Self::VarRateItemsIter>, Self::Error>;
+
+    fn collect(mut self) -> Result<Vec<Self::Item>, Self::Error>
+    where
+        Self: Sized,
+    {
+        let mut vec = Vec::new();
+        while let Some(iter) = self.next()? {
+            let (to_reserve, _) = iter.size_hint();
+            vec.reserve(to_reserve);
+            for item in iter {
+                vec.push(item);
+            }
+        }
+        Ok(vec)
+    }
 }
 
 /// An adapter from VarRateFailableIterator to a normal (fixed rate) FailableIterator.

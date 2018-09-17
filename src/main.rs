@@ -4,7 +4,7 @@ mod failable;
 mod lex;
 mod peeking;
 use bitflags::bitflags;
-use crate::failable::{FailableIterator, FailablePeekable};
+use crate::failable::{FailableIterator, FailablePeekable, VarRateFailableIterator};
 use crate::lex::{Keyword, LexError, Position, PositionedToken, Punctuator, Token, TokenIter};
 use std::collections::HashMap;
 
@@ -123,7 +123,6 @@ enum FunctionParameters {
 enum ExternalDecl {
     Decl(String, DefinableType),
     TypeDef(String, DefinableType),
-    Nothing,
 }
 
 #[derive(Debug, Clone)]
@@ -333,14 +332,16 @@ impl<'a> Parser<'a> {
         // TODO: Handle parameters
         panic!("TODO: Handle parameters")
     }
+}
 
-    // TODO:
-    // - Should maybe be a normal iterator
-    // - It's hard to understand the difference between empty Vec and a Vec with Nothing
-    fn read_next_external_declaration(&mut self) -> Result<Vec<ExternalDecl>, ParseError> {
-        let mut decls = Vec::new();
+impl<'a> VarRateFailableIterator for Parser<'a> {
+    type Item = ExternalDecl;
+    type Error = ParseError;
+    type VarRateItemsIter = std::vec::IntoIter<Self::Item>;
+
+    fn next(&mut self) -> Result<Option<Self::VarRateItemsIter>, Self::Error> {
         if self.iter.peek()?.is_none() {
-            return Ok(decls);
+            return Ok(None);
         }
         let is_typedef = self.iter.advance_if_kw(Keyword::Typedef)?;
         let base_qual_ty = {
@@ -358,9 +359,10 @@ impl<'a> Parser<'a> {
         };
 
         if self.iter.advance_if_punc(Punctuator::Semicolon)? {
-            decls.push(ExternalDecl::Nothing);
-            return Ok(decls);
+            return Ok(Some(Vec::new().into_iter()));
         }
+
+        let mut decls = Vec::new();
 
         loop {
             let mut ptr_qualifs = Vec::new();
@@ -452,7 +454,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Ok(decls)
+        Ok(Some(decls.into_iter()))
     }
 }
 
@@ -461,19 +463,11 @@ mod tests {
     use super::*;
 
     fn parse_external_declarations(code: &str) -> Vec<ExternalDecl> {
-        let mut parser = Parser::from_code(code);
-        let mut decls = Vec::new();
-        loop {
-            match parser.read_next_external_declaration() {
-                Ok(mut new_decls) => if new_decls.is_empty() {
-                    break;
-                } else {
-                    decls.append(&mut new_decls);
-                },
-                Err(err) => panic!(r#"Unexpected error {:?} for "{:}""#, err, code),
-            };
+        let parser = Parser::from_code(code);
+        match parser.collect() {
+            Ok(decls) => decls,
+            Err(err) => panic!(r#"Unexpected error {:?} for "{:}""#, err, code),
         }
-        decls
     }
 
     fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
@@ -549,10 +543,7 @@ mod tests {
                 )),
             ))
         );
-        assert_eq!(
-            parse_one_external_declaration(r#"signed long;"#),
-            Some(ExternalDecl::Nothing)
-        );
+        assert_eq!(parse_external_declarations(r#"signed long;"#), vec![]);
         assert_eq!(
             parse_one_external_declaration(r#"unsigned char abcd;"#),
             Some(ExternalDecl::Decl(
@@ -792,7 +783,7 @@ mod tests {
 
 fn main() -> Result<(), ParseError> {
     let mut parser = Parser::from_code(r#"x;"#);
-    let decl = parser.read_next_external_declaration()?;
-    println!("Declaration: {:?}", decl);
+    let decls = parser.next()?;
+    println!("Declaration: {:?}", decls);
     Ok(())
 }
