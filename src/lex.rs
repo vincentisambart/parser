@@ -6,6 +6,7 @@
 // - handle more preprocessing directives (#error, unknown #pragma should be an error...)
 // - merge succession of string literals into one
 
+use crate::failable::FailableIterator;
 use crate::peeking::Peeking;
 use lazy_static::lazy_static;
 use std::char;
@@ -840,12 +841,13 @@ enum EndKind {
     File,
 }
 
-impl<'a> Iterator for TokenIter<'a> {
-    type Item = Result<PositionedToken, LexError>;
+impl<'a> FailableIterator for TokenIter<'a> {
+    type Item = PositionedToken;
+    type Error = LexError;
 
-    fn next(&mut self) -> Option<Result<PositionedToken, LexError>> {
+    fn next(&mut self) -> Result<Option<PositionedToken>, LexError> {
         if let Some(token) = self.next_token_to_return.take() {
-            return Some(Ok(PositionedToken(token, self.position.clone())));
+            return Ok(Some(PositionedToken(token, self.position.clone())));
         }
 
         let mut preprocessing_directive: Option<Vec<Token>> = None;
@@ -864,31 +866,22 @@ impl<'a> Iterator for TokenIter<'a> {
             };
             if let Some(end) = end {
                 if let Some(ref mut directive) = preprocessing_directive {
-                    if let Err(err) = self.handle_preprocessing_directive(directive.as_ref()) {
-                        break Some(Err(err));
-                    };
+                    self.handle_preprocessing_directive(directive.as_ref())?;
                     preprocessing_directive = None;
                 } else {
                     self.position.line += 1;
                 }
                 if end == EndKind::File {
-                    break None;
+                    return Ok(None);
                 }
                 self.is_start_of_line = true;
                 continue;
             }
 
-            let token = match self.next_token() {
-                Ok(token) => token,
-                Err(err) => {
-                    break Some(Err(err));
-                }
-            };
+            let token = self.next_token()?;
             if token == Token::Punctuator(Punctuator::Hash) {
                 if !self.is_start_of_line {
-                    break Some(Err(LexError::InvalidPreprocDirective(
-                        self.position.clone(),
-                    )));
+                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
                 } else {
                     preprocessing_directive = Some(Vec::new());
                     self.is_start_of_line = false;
@@ -900,13 +893,12 @@ impl<'a> Iterator for TokenIter<'a> {
             if let Some(ref mut directive) = preprocessing_directive {
                 directive.push(token);
             } else {
-                break Some(Ok(PositionedToken(token, self.position.clone())));
+                break PositionedToken(token, self.position.clone());
             }
         };
-        if let Some(Ok(PositionedToken(ref valid_token, _))) = token {
-            self.previous_token = Some(valid_token.clone());
-        }
-        token
+        let PositionedToken(ref valid_token, _) = token;
+        self.previous_token = Some(valid_token.clone());
+        Ok(Some(token))
     }
 }
 
@@ -917,7 +909,7 @@ mod tests {
     fn parse_one_valid_token(code: &str) -> Token {
         let mut iter = TokenIter::from(code);
         let token = iter.next().unwrap().unwrap();
-        if let Some(_) = iter.next() {
+        if let Some(_) = iter.next().unwrap() {
             panic!("Multiple tokens found in {:}", code);
         }
         match token {
@@ -926,11 +918,16 @@ mod tests {
     }
 
     fn parse_valid_tokens(code: &str) -> Vec<Token> {
-        let iter = TokenIter::from(code);
-        iter.map(|token| match token {
-            Ok(PositionedToken(token, _)) => token,
-            Err(err) => panic!("Error parsing \"{:}\": {:?}", code, err),
-        }).collect()
+        let mut iter = TokenIter::from(code);
+        let mut tokens = Vec::new();
+        loop {
+            match iter.next() {
+                Ok(Some(PositionedToken(token, _))) => tokens.push(token),
+                Ok(None) => break,
+                Err(err) => panic!("Error parsing \"{:}\": {:?}", code, err),
+            }
+        }
+        tokens
     }
 
     #[test]
