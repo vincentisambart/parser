@@ -206,6 +206,41 @@ impl DeclaratorParenLevel {
     fn is_empty(&self) -> bool {
         self.ptr_qualifs.is_empty() && self.func_params.is_none() && self.array_sizes.is_empty()
     }
+
+    fn apply(self, mut def_ty: DefinableType) -> Result<DefinableType, ParseError> {
+        for qualifiers in self.ptr_qualifs {
+            def_ty = DefinableType::Qual(QualifiedType(
+                QualifiableType::Ptr(Box::new(def_ty)),
+                qualifiers,
+            ));
+        }
+        if let Some(func_params) = self.func_params {
+            def_ty = match def_ty {
+                DefinableType::Qual(qual_ty) => {
+                    DefinableType::Func(FunctionType(qual_ty, func_params))
+                }
+                DefinableType::Array(_) | DefinableType::Func(_) => {
+                    panic!("A function can't return an array or function - TODO: proper error")
+                }
+            };
+        }
+        for array_size in self.array_sizes.into_iter().rev() {
+            def_ty = match def_ty {
+                DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
+                    array_size,
+                    Box::new(ContainableType::Qual(qual_ty)),
+                )),
+                DefinableType::Array(array_ty) => DefinableType::Array(ArrayType(
+                    array_size,
+                    Box::new(ContainableType::Array(array_ty)),
+                )),
+                DefinableType::Func(_) => {
+                    panic!("You can't have an array of funcs - TODO: proper error")
+                }
+            };
+        }
+        Ok(def_ty)
+    }
 }
 
 struct Parser<'a> {
@@ -395,37 +430,7 @@ impl<'a> Parser<'a> {
                 });
                 let mut def_ty = DefinableType::Qual(base_qual_ty);
                 for level in levels {
-                    for qualifiers in level.ptr_qualifs {
-                        def_ty = DefinableType::Qual(QualifiedType(
-                            QualifiableType::Ptr(Box::new(def_ty)),
-                            qualifiers,
-                        ));
-                    }
-                    if let Some(func_params) = level.func_params {
-                        def_ty = match def_ty {
-                            DefinableType::Qual(qual_ty) => {
-                                DefinableType::Func(FunctionType(qual_ty, func_params))
-                            }
-                            DefinableType::Array(_) | DefinableType::Func(_) => panic!(
-                                "A function can't return an array or function - TODO: proper error"
-                            ),
-                        };
-                    }
-                    for array_size in level.array_sizes.into_iter().rev() {
-                        def_ty = match def_ty {
-                            DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
-                                array_size,
-                                Box::new(ContainableType::Qual(qual_ty)),
-                            )),
-                            DefinableType::Array(array_ty) => DefinableType::Array(ArrayType(
-                                array_size,
-                                Box::new(ContainableType::Array(array_ty)),
-                            )),
-                            DefinableType::Func(_) => {
-                                panic!("You can't have an array of funcs - TODO: proper error")
-                            }
-                        };
-                    }
+                    def_ty = level.apply(def_ty)?;
                 }
                 let containable = match def_ty {
                     DefinableType::Qual(qual_ty) => ContainableType::Qual(qual_ty),
@@ -558,37 +563,7 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
 
             let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
             for level in levels {
-                for qualifiers in level.ptr_qualifs {
-                    def_ty = DefinableType::Qual(QualifiedType(
-                        QualifiableType::Ptr(Box::new(def_ty)),
-                        qualifiers,
-                    ));
-                }
-                if let Some(func_params) = level.func_params {
-                    def_ty = match def_ty {
-                        DefinableType::Qual(qual_ty) => {
-                            DefinableType::Func(FunctionType(qual_ty, func_params))
-                        }
-                        DefinableType::Array(_) | DefinableType::Func(_) => panic!(
-                            "A function can't return an array or function - TODO: proper error"
-                        ),
-                    };
-                }
-                for array_size in level.array_sizes.into_iter().rev() {
-                    def_ty = match def_ty {
-                        DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
-                            array_size,
-                            Box::new(ContainableType::Qual(qual_ty)),
-                        )),
-                        DefinableType::Array(array_ty) => DefinableType::Array(ArrayType(
-                            array_size,
-                            Box::new(ContainableType::Array(array_ty)),
-                        )),
-                        DefinableType::Func(_) => {
-                            panic!("You can't have an array of funcs - TODO: proper error")
-                        }
-                    };
-                }
+                def_ty = level.apply(def_ty)?;
             }
 
             if is_typedef {
