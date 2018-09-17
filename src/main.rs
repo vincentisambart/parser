@@ -337,7 +337,7 @@ impl<'a> Parser<'a> {
     }
 
     // Should be called just after having read an opening parenthesis.
-    fn read_func_args(&mut self) -> Result<FunctionParameters, ParseError> {
+    fn read_func_params(&mut self) -> Result<FunctionParameters, ParseError> {
         if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
             return Ok(FunctionParameters::Undefined);
         }
@@ -361,6 +361,22 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken(token, position))
             }
             None => Err(ParseError::UnexpectedEOF),
+        }
+    }
+}
+
+struct TypeDeclParenLevel {
+    ptr_qualifs: Vec<TypeQualifiers>,
+    func_params: Option<FunctionParameters>,
+    array_sizes: Vec<ArraySize>,
+}
+
+impl TypeDeclParenLevel {
+    fn new() -> TypeDeclParenLevel {
+        TypeDeclParenLevel {
+            ptr_qualifs: Vec::new(),
+            func_params: None,
+            array_sizes: Vec::new(),
         }
     }
 }
@@ -394,74 +410,57 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
         }
 
         let mut decls = Vec::new();
-
         loop {
-            let mut ptr_qualifs = Vec::new();
-            let mut ptr_qualifs_stack = Vec::new();
+            let mut levels = Vec::new();
+            let mut current_level = TypeDeclParenLevel::new();
             let ident = loop {
                 if self.iter.advance_if_punc(Punctuator::Star)? {
                     let mut qualifiers = TypeQualifiers::empty();
                     while let Some(qualifier) = self.read_type_qualifier()? {
                         qualifiers |= qualifier;
                     }
-                    ptr_qualifs.push(qualifiers);
+                    current_level.ptr_qualifs.push(qualifiers);
                 } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                    ptr_qualifs_stack.push(ptr_qualifs);
-                    ptr_qualifs = Vec::new();
+                    levels.push(current_level);
+                    current_level = TypeDeclParenLevel::new();
                 } else if let Some(ident) = self.iter.next_if_any_ident()? {
-                    ptr_qualifs_stack.push(ptr_qualifs);
+                    levels.push(current_level);
                     break ident;
                 } else {
                     panic!("TODO: Incorrect decl");
                 }
             };
-            let mut ptr_qualifs_reversed_stack = Vec::new();
-            loop {
-                let ptr_qualifs = if let Some(ptr_qualifs) = ptr_qualifs_stack.pop() {
-                    ptr_qualifs
-                } else {
-                    panic!("TODO: Incorrect decl");
-                };
-                let func_args;
+            for (i, level) in levels.iter_mut().enumerate().rev() {
                 if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                    func_args = Some(self.read_func_args()?);
-                } else {
-                    func_args = None;
+                    level.func_params = Some(self.read_func_params()?);
                 }
-                let mut array_sizes = Vec::new();
                 while self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
-                    array_sizes.push(self.read_array_size()?);
+                    level.array_sizes.push(self.read_array_size()?);
                 }
-                ptr_qualifs_reversed_stack.push((ptr_qualifs, func_args, array_sizes));
-                if ptr_qualifs_stack.is_empty() {
-                    break;
-                } else {
+                if i != 0 {
                     self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
                 }
             }
-            assert!(ptr_qualifs_stack.is_empty());
-            drop(ptr_qualifs_stack);
 
             let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
-            while let Some((ptr_qualifs, func_args, array_sizes)) = ptr_qualifs_reversed_stack.pop()
-            {
-                for qualifiers in ptr_qualifs {
+            for level in levels {
+                for qualifiers in level.ptr_qualifs {
                     def_ty = DefinableType::Qual(QualifiedType(
                         QualifiableType::Ptr(Box::new(def_ty)),
                         qualifiers,
                     ));
                 }
-                if let Some(func_args) = func_args {
+                if let Some(func_params) = level.func_params {
                     def_ty = match def_ty {
                         DefinableType::Qual(qual_ty) => {
-                            DefinableType::Func(FunctionType(qual_ty, func_args))
+                            DefinableType::Func(FunctionType(qual_ty, func_params))
                         }
-                        DefinableType::Array(_) | DefinableType::Func(_) => {
-                            panic!("You can't return an array or func - TODO: proper error")
-                        }
+                        DefinableType::Array(_) | DefinableType::Func(_) => panic!(
+                            "A function can't return an array or function - TODO: proper error"
+                        ),
                     };
                 }
-                for array_size in array_sizes.into_iter().rev() {
+                for array_size in level.array_sizes.into_iter().rev() {
                     def_ty = match def_ty {
                         DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
                             array_size,
