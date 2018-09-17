@@ -900,6 +900,43 @@ mod tests {
                 )
             ]
         );
+        // assert_eq!(
+        //     parse_external_declarations(r#"typedef int *foo, bar(foo x);"#),
+        //     vec![
+        //         ExternalDecl::TypeDef(
+        //             "foo".to_string(),
+        //             def_ptr(DefinableType::Qual(QualifiedType(
+        //                 QualifiableType::Prim(PrimitiveType::Int),
+        //                 TypeQualifiers::empty()
+        //             )))
+        //         ),
+        //         ExternalDecl::TypeDef(
+        //             "bar".to_string(),
+        //             DefinableType::Func(FunctionType(
+        //                 QualifiedType(
+        //                     QualifiableType::Prim(PrimitiveType::Int),
+        //                     TypeQualifiers::empty()
+        //                 ),
+        //                 FunctionParameters::Defined {
+        //                     params: vec![FunctionParameter(
+        //                         Some("x".to_string()),
+        //                         ContainableType::Qual(QualifiedType(
+        //                             QualifiableType::Custom(
+        //                                 "foo".to_string(),
+        //                                 Box::new(def_ptr(DefinableType::Qual(QualifiedType(
+        //                                     QualifiableType::Prim(PrimitiveType::Int),
+        //                                     TypeQualifiers::empty()
+        //                                 ))))
+        //                             ),
+        //                             TypeQualifiers::empty()
+        //                         )),
+        //                     )],
+        //                     variable: true,
+        //                 }
+        //             ))
+        //         )
+        //     ]
+        // );
     }
 }
 
