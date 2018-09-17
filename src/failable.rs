@@ -1,4 +1,4 @@
-/// An iterator-like trait for which next can fail.
+// An iterator-like trait for which next can fail.
 pub trait FailableIterator {
     type Item;
     type Error;
@@ -27,7 +27,7 @@ pub trait FailableIterator {
     }
 }
 
-/// Peekable for FailableIterator. Note that peek can also fail.
+// Peekable for FailableIterator. Note that peek can also fail.
 pub struct FailablePeekable<I: FailableIterator> {
     iter: I,
     peeked: Option<Option<I::Item>>,
@@ -79,9 +79,9 @@ impl<I: FailableIterator> FailableIterator for FailablePeekable<I> {
     }
 }
 
-/// An iterator-like trait with the following properties:
-/// - can fail (next can return an error)
-/// - next can return a variable number of items (including 0, and that doesn't mean the end of the stream).
+// An iterator-like trait with the following properties:
+// - can fail (next can return an error)
+// - next can return a variable number of items (including 0, and that doesn't mean the end of the stream).
 pub trait VarRateFailableIterator {
     type Item;
     type Error;
@@ -105,7 +105,7 @@ pub trait VarRateFailableIterator {
     }
 }
 
-/// An adapter from VarRateFailableIterator to a normal (fixed rate) FailableIterator.
+// An adapter from VarRateFailableIterator to a normal (fixed rate) FailableIterator.
 pub struct FixedRateFailableIterator<I: VarRateFailableIterator> {
     iter: I,
     previous: Option<I::VarRateItemsIter>,
