@@ -119,7 +119,7 @@ struct ArrayType(ArraySize, Box<ContainableType>);
 struct FunctionType(QualifiedType, FunctionParameters);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FunctionParameter(Option<String>, ContainableType);
+struct FunctionParameter(Option<String>, Option<ContainableType>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FunctionParameters {
@@ -201,6 +201,10 @@ impl DeclaratorParenLevel {
             func_params: None,
             array_sizes: Vec::new(),
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ptr_qualifs.is_empty() && self.func_params.is_none() && self.array_sizes.is_empty()
     }
 }
 
@@ -356,21 +360,97 @@ impl<'a> Parser<'a> {
             // foo(void) means undefined number of parameters
             return Ok(FunctionParameters::Undefined);
         }
-        let base_qual_ty = self.read_qual_base_type()?;
-        match base_qual_ty {
-            Some(QualifiedType(QualifiableType::Prim(PrimitiveType::Void), qualifiers))
-                if qualifiers.is_empty() =>
-            {
-                if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
-                    // foo(void) means no parameter
-                    return Ok(FunctionParameters::Defined(Vec::new(), false));
+        let mut params = Vec::new();
+        let mut is_first_param = true;
+        let mut is_variable = false;
+        loop {
+            let base_qual_ty = self.read_qual_base_type()?;
+            if is_first_param {
+                match base_qual_ty {
+                    Some(QualifiedType(QualifiableType::Prim(PrimitiveType::Void), qualifiers))
+                        if qualifiers.is_empty() =>
+                    {
+                        if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+                            // foo(void) means no parameter
+                            break;
+                        }
+                    }
+                    _ => (),
                 }
             }
-            _ => (),
+
+            let (ident, levels) = self.read_declarator()?;
+            if base_qual_ty.is_none() && levels.len() == 1 && levels[0].is_empty() {
+                // No type
+                if ident.is_none() {
+                    panic!("Should have a least an identifier or a type - TODO: proper error");
+                }
+                params.push(FunctionParameter(ident, None));
+            } else {
+                let base_qual_ty = base_qual_ty.unwrap_or_else(|| {
+                    QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty(),
+                    )
+                });
+                let mut def_ty = DefinableType::Qual(base_qual_ty);
+                for level in levels {
+                    for qualifiers in level.ptr_qualifs {
+                        def_ty = DefinableType::Qual(QualifiedType(
+                            QualifiableType::Ptr(Box::new(def_ty)),
+                            qualifiers,
+                        ));
+                    }
+                    if let Some(func_params) = level.func_params {
+                        def_ty = match def_ty {
+                            DefinableType::Qual(qual_ty) => {
+                                DefinableType::Func(FunctionType(qual_ty, func_params))
+                            }
+                            DefinableType::Array(_) | DefinableType::Func(_) => panic!(
+                                "A function can't return an array or function - TODO: proper error"
+                            ),
+                        };
+                    }
+                    for array_size in level.array_sizes.into_iter().rev() {
+                        def_ty = match def_ty {
+                            DefinableType::Qual(qual_ty) => DefinableType::Array(ArrayType(
+                                array_size,
+                                Box::new(ContainableType::Qual(qual_ty)),
+                            )),
+                            DefinableType::Array(array_ty) => DefinableType::Array(ArrayType(
+                                array_size,
+                                Box::new(ContainableType::Array(array_ty)),
+                            )),
+                            DefinableType::Func(_) => {
+                                panic!("You can't have an array of funcs - TODO: proper error")
+                            }
+                        };
+                    }
+                }
+                let containable = match def_ty {
+                    DefinableType::Qual(qual_ty) => ContainableType::Qual(qual_ty),
+                    DefinableType::Array(array_ty) => ContainableType::Array(array_ty),
+                    DefinableType::Func(_) => {
+                        panic!("A function can't be a type parameter - TODO: proper error")
+                    }
+                };
+                params.push(FunctionParameter(ident, Some(containable)));
+            }
+
+            is_first_param = false;
+            if self.iter.advance_if_punc(Punctuator::Comma)? {
+                if self.iter.advance_if_punc(Punctuator::Ellipsis)? {
+                    is_variable = true;
+                    self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                    break;
+                }
+            } else {
+                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                break;
+            }
         }
 
-        // TODO: Handle parameters
-        panic!("TODO: Handle parameters")
+        Ok(FunctionParameters::Defined(params, is_variable))
     }
 
     // Should be called just after having read an opening square bracket.
@@ -695,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_function_declaration() {
+    fn test_function_declaration() {
         assert_eq!(
             parse_one_external_declaration(r#"foo();"#),
             Some(ExternalDecl::Decl(
@@ -722,10 +802,41 @@ mod tests {
                 ))
             ))
         );
+        assert_eq!(
+            parse_one_external_declaration(r#"void foo(int a, char b, ...);"#),
+            Some(ExternalDecl::Decl(
+                "foo".to_string(),
+                DefinableType::Func(FunctionType(
+                    QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    FunctionParameters::Defined(
+                        vec![
+                            FunctionParameter(
+                                Some("a".to_string()),
+                                Some(ContainableType::Qual(QualifiedType(
+                                    QualifiableType::Prim(PrimitiveType::Int),
+                                    TypeQualifiers::empty()
+                                ))),
+                            ),
+                            FunctionParameter(
+                                Some("b".to_string()),
+                                Some(ContainableType::Qual(QualifiedType(
+                                    QualifiableType::Prim(PrimitiveType::Char),
+                                    TypeQualifiers::empty()
+                                ))),
+                            )
+                        ],
+                        true
+                    )
+                ))
+            ))
+        );
     }
 
     #[test]
-    fn test_parse_function_pointer_declaration() {
+    fn test_function_pointer_declaration() {
         assert_eq!(
             parse_one_external_declaration(r#"int (*foo)();"#),
             Some(ExternalDecl::Decl(
@@ -800,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_array_declaration() {
+    fn test_array_declaration() {
         assert_eq!(
             parse_one_external_declaration(r#"int foo[10];"#),
             Some(ExternalDecl::Decl(
@@ -947,43 +1058,43 @@ mod tests {
                 )
             ]
         );
-        // assert_eq!(
-        //     parse_external_declarations(r#"typedef int *foo, bar(foo x);"#),
-        //     vec![
-        //         ExternalDecl::TypeDef(
-        //             "foo".to_string(),
-        //             def_ptr(DefinableType::Qual(QualifiedType(
-        //                 QualifiableType::Prim(PrimitiveType::Int),
-        //                 TypeQualifiers::empty()
-        //             )))
-        //         ),
-        //         ExternalDecl::TypeDef(
-        //             "bar".to_string(),
-        //             DefinableType::Func(FunctionType(
-        //                 QualifiedType(
-        //                     QualifiableType::Prim(PrimitiveType::Int),
-        //                     TypeQualifiers::empty()
-        //                 ),
-        //                 FunctionParameters::Defined {
-        //                     params: vec![FunctionParameter(
-        //                         Some("x".to_string()),
-        //                         ContainableType::Qual(QualifiedType(
-        //                             QualifiableType::Custom(
-        //                                 "foo".to_string(),
-        //                                 Box::new(def_ptr(DefinableType::Qual(QualifiedType(
-        //                                     QualifiableType::Prim(PrimitiveType::Int),
-        //                                     TypeQualifiers::empty()
-        //                                 ))))
-        //                             ),
-        //                             TypeQualifiers::empty()
-        //                         )),
-        //                     )],
-        //                     variable: true,
-        //                 }
-        //             ))
-        //         )
-        //     ]
-        // );
+        assert_eq!(
+            parse_external_declarations(r#"typedef int *foo, bar(foo x);"#),
+            vec![
+                ExternalDecl::TypeDef(
+                    "foo".to_string(),
+                    def_ptr(DefinableType::Qual(QualifiedType(
+                        QualifiableType::Prim(PrimitiveType::Int),
+                        TypeQualifiers::empty()
+                    )))
+                ),
+                ExternalDecl::TypeDef(
+                    "bar".to_string(),
+                    DefinableType::Func(FunctionType(
+                        QualifiedType(
+                            QualifiableType::Prim(PrimitiveType::Int),
+                            TypeQualifiers::empty()
+                        ),
+                        FunctionParameters::Defined(
+                            vec![FunctionParameter(
+                                Some("x".to_string()),
+                                Some(ContainableType::Qual(QualifiedType(
+                                    QualifiableType::Custom(
+                                        "foo".to_string(),
+                                        Box::new(def_ptr(DefinableType::Qual(QualifiedType(
+                                            QualifiableType::Prim(PrimitiveType::Int),
+                                            TypeQualifiers::empty()
+                                        ))))
+                                    ),
+                                    TypeQualifiers::empty()
+                                ))),
+                            )],
+                            false
+                        )
+                    ))
+                )
+            ]
+        );
     }
 }
 
