@@ -83,6 +83,17 @@ bitflags! {
     }
 }
 
+// TODO: Give name to components (name, real_value, specified_valie)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnumValue(String, u32, Option<u32>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tag {
+    Enum(Option<Vec<EnumValue>>),
+    Struct,
+    Union,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DefinableType {
     Func(FunctionType),
@@ -94,6 +105,7 @@ enum DefinableType {
 enum QualifiableType {
     Prim(PrimitiveType),
     Ptr(Box<DefinableType>),
+    Tag(Option<String>, Tag),
     Custom(String, Box<DefinableType>),
 }
 
@@ -118,6 +130,7 @@ struct ArrayType(ArraySize, Box<ContainableType>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionType(QualifiedType, FunctionParameters);
 
+// TODO: The ContainableType should not be optional
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionParameter(Option<String>, Option<ContainableType>);
 
@@ -127,7 +140,7 @@ enum FunctionParameters {
     Defined(Vec<FunctionParameter>, bool),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ExternalDecl {
     Decl(String, DefinableType),
     TypeDef(String, DefinableType),
@@ -279,6 +292,12 @@ impl<'a> Parser<'a> {
     fn read_base_type(&mut self) -> Result<Option<QualifiableType>, ParseError> {
         let ty = if let Some(prim) = self.read_primitive_type()? {
             Some(QualifiableType::Prim(prim))
+        } else if self.iter.advance_if_kw(Keyword::Enum)? {
+            let ident = self.iter.next_if_any_ident()?;
+            if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+                panic!("TODO");
+            }
+            Some(QualifiableType::Tag(ident, Tag::Enum(None)))
         } else {
             let type_manager = &self.type_manager;
             if let Some(PositionedToken(Token::Identifier(ident), _)) =
@@ -1070,6 +1089,114 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn test_tag_definition() {
+        assert_eq!(parse_external_declarations(r#"enum foo;"#), vec![]);
+        assert_eq!(
+            parse_external_declarations(r#"enum foo bar;"#),
+            vec![ExternalDecl::Decl(
+                "bar".to_string(),
+                DefinableType::Qual(QualifiedType(
+                    QualifiableType::Tag(Some("foo".to_string()), Tag::Enum(None)),
+                    TypeQualifiers::empty()
+                ))
+            )]
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar;"#),
+            Some(ExternalDecl::Decl(
+                "bar".to_string(),
+                DefinableType::Qual(QualifiedType(
+                    QualifiableType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Enum(Some(vec![
+                            EnumValue("a".to_string(), 0, None),
+                            EnumValue("b".to_string(), 10, Some(10)),
+                            EnumValue("c".to_string(), 11, None),
+                        ]))
+                    ),
+                    TypeQualifiers::empty()
+                ))
+            ))
+        );
+        assert_eq!(
+            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar(void);"#),
+            Some(ExternalDecl::Decl(
+                "bar".to_string(),
+                DefinableType::Func(FunctionType(
+                    QualifiedType(
+                        QualifiableType::Tag(
+                            Some("foo".to_string()),
+                            Tag::Enum(Some(vec![
+                                EnumValue("a".to_string(), 0, None),
+                                EnumValue("b".to_string(), 10, Some(10)),
+                                EnumValue("c".to_string(), 11, None),
+                            ]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    FunctionParameters::Defined(vec![], false)
+                ))
+            ))
+        );
+
+        assert_eq!(
+            // unnamed enum
+            parse_one_external_declaration(r#"enum { a, b = 10, c } bar(void);"#),
+            Some(ExternalDecl::Decl(
+                "bar".to_string(),
+                DefinableType::Func(FunctionType(
+                    QualifiedType(
+                        QualifiableType::Tag(
+                            None,
+                            Tag::Enum(Some(vec![
+                                EnumValue("a".to_string(), 0, None),
+                                EnumValue("b".to_string(), 10, Some(10)),
+                                EnumValue("c".to_string(), 11, None),
+                            ]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    FunctionParameters::Defined(vec![], false)
+                ))
+            ))
+        );
+        assert_eq!(
+            // enum in function parameters - note that in that case the enum is only usable inside the function.
+            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar(enum hoge { x });"#),
+            Some(ExternalDecl::Decl(
+                "bar".to_string(),
+                DefinableType::Func(FunctionType(
+                    QualifiedType(
+                        QualifiableType::Tag(
+                            Some("foo".to_string()),
+                            Tag::Enum(Some(vec![
+                                EnumValue("a".to_string(), 0, None),
+                                EnumValue("b".to_string(), 10, Some(10)),
+                                EnumValue("c".to_string(), 11, None),
+                            ]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    FunctionParameters::Defined(
+                        vec![FunctionParameter(
+                            None,
+                            Some(ContainableType::Qual(QualifiedType(
+                                QualifiableType::Tag(
+                                    Some("hoge".to_string()),
+                                    Tag::Enum(Some(vec![EnumValue("x".to_string(), 0, None)]))
+                                ),
+                                TypeQualifiers::empty()
+                            )))
+                        )],
+                        false
+                    )
+                ))
+            ))
+        );
+        // enum foo { a, b = 10, c };
     }
 }
 
