@@ -2,6 +2,8 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
+// - Make most panics/expect normal errors
+
 mod failable;
 mod lex;
 mod peeking;
@@ -85,7 +87,7 @@ bitflags! {
 
 // TODO: Give name to components (name, real_value, specified_valie)
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct EnumValue(String, u32, Option<u32>);
+struct EnumValue(String, Option<u32>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tag {
@@ -233,7 +235,7 @@ impl DeclaratorParenLevel {
                     DefinableType::Func(FunctionType(qual_ty, func_params))
                 }
                 DefinableType::Array(_) | DefinableType::Func(_) => {
-                    panic!("A function can't return an array or function - TODO: proper error")
+                    panic!("A function can't return an array or function")
                 }
             };
         }
@@ -247,9 +249,7 @@ impl DeclaratorParenLevel {
                     array_size,
                     Box::new(ContainableType::Array(array_ty)),
                 )),
-                DefinableType::Func(_) => {
-                    panic!("You can't have an array of funcs - TODO: proper error")
-                }
+                DefinableType::Func(_) => panic!("You can't have an array of funcs"),
             };
         }
         Ok(def_ty)
@@ -293,11 +293,35 @@ impl<'a> Parser<'a> {
         let ty = if let Some(prim) = self.read_primitive_type()? {
             Some(QualifiableType::Prim(prim))
         } else if self.iter.advance_if_kw(Keyword::Enum)? {
-            let ident = self.iter.next_if_any_ident()?;
+            let enum_name = self.iter.next_if_any_ident()?;
             if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
-                panic!("TODO");
+                let mut enum_values = Vec::new();
+                loop {
+                    if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                        break;
+                    } else if let Some(value_name) = self.iter.next_if_any_ident()? {
+                        if self.iter.advance_if_punc(Punctuator::Equal)? {
+                            let value = self.read_constant_value()?;
+                            enum_values.push(EnumValue(value_name, Some(value)));
+                        } else {
+                            enum_values.push(EnumValue(value_name, None));
+                        }
+                        if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                            break;
+                        } else {
+                            self.expect_token(Token::Punctuator(Punctuator::Comma))?;
+                        }
+                    } else {
+                        panic!("invalid enum decl");
+                    }
+                }
+                Some(QualifiableType::Tag(
+                    enum_name,
+                    Tag::Enum(Some(enum_values)),
+                ))
+            } else {
+                Some(QualifiableType::Tag(enum_name, Tag::Enum(None)))
             }
-            Some(QualifiableType::Tag(ident, Tag::Enum(None)))
         } else {
             let type_manager = &self.type_manager;
             if let Some(PositionedToken(Token::Identifier(ident), _)) =
@@ -437,7 +461,7 @@ impl<'a> Parser<'a> {
             if base_qual_ty.is_none() && levels.len() == 1 && levels[0].is_empty() {
                 // No type
                 if ident.is_none() {
-                    panic!("Should have a least an identifier or a type - TODO: proper error");
+                    panic!("Should have a least an identifier or a type");
                 }
                 params.push(FunctionParameter(ident, None));
             } else {
@@ -454,9 +478,7 @@ impl<'a> Parser<'a> {
                 let containable = match def_ty {
                     DefinableType::Qual(qual_ty) => ContainableType::Qual(qual_ty),
                     DefinableType::Array(array_ty) => ContainableType::Array(array_ty),
-                    DefinableType::Func(_) => {
-                        panic!("A function can't be a type parameter - TODO: proper error")
-                    }
+                    DefinableType::Func(_) => panic!("A function can't be a type parameter"),
                 };
                 params.push(FunctionParameter(ident, Some(containable)));
             }
@@ -477,23 +499,28 @@ impl<'a> Parser<'a> {
         Ok(FunctionParameters::Defined(params, is_variable))
     }
 
-    // Should be called just after having read an opening square bracket.
-    fn read_array_size(&mut self) -> Result<ArraySize, ParseError> {
-        if self.iter.advance_if_punc(Punctuator::RightSquareBracket)? {
-            return Ok(ArraySize::Unspecified);
-        }
-
+    // TODO: The return value should be the AST of an expression
+    fn read_constant_value(&mut self) -> Result<u32, ParseError> {
         match self.iter.next()? {
             Some(PositionedToken(Token::IntegerLiteral(literal, repr, _), _)) => {
-                let size = u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap();
-                self.expect_token(Token::Punctuator(Punctuator::RightSquareBracket))?;
-                Ok(ArraySize::Fixed(size))
+                Ok(u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap())
             }
             Some(PositionedToken(token, position)) => {
                 Err(ParseError::UnexpectedToken(token, position))
             }
             None => Err(ParseError::UnexpectedEOF),
         }
+    }
+
+    // Should be called just after having read an opening square bracket.
+    fn read_array_size(&mut self) -> Result<ArraySize, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::RightSquareBracket)? {
+            return Ok(ArraySize::Unspecified);
+        }
+
+        let size = self.read_constant_value()?;
+        self.expect_token(Token::Punctuator(Punctuator::RightSquareBracket))?;
+        Ok(ArraySize::Fixed(size))
     }
 
     fn read_declarator(
@@ -578,7 +605,7 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
         let mut decls = Vec::new();
         loop {
             let (ident, levels) = self.read_declarator()?;
-            let ident = ident.expect("A decl should have an identifier - TODO: proper error");
+            let ident = ident.expect("A decl should have an identifier");
 
             let mut def_ty = DefinableType::Qual(base_qual_ty.clone());
             for level in levels {
@@ -589,7 +616,9 @@ impl<'a> VarRateFailableIterator for Parser<'a> {
                 if let Some(existing) = self.type_manager.type_in_current_scope(ident.as_ref()) {
                     // TODO: Should be a comparison of the type with all custom types expanded.
                     if *existing != def_ty {
-                        panic!("A typedef cannot redefine an already defined type on the same scope - TODO: proper error");
+                        panic!(
+                            "A typedef cannot redefine an already defined type on the same scope"
+                        );
                     }
                 } else {
                     self.type_manager
@@ -629,17 +658,6 @@ mod tests {
         }
     }
 
-    fn parse_one_external_declaration(code: &str) -> Option<ExternalDecl> {
-        let decls = parse_external_declarations(code);
-        if decls.len() > 1 {
-            panic!(
-                r#"Unexpected {:?} after {:?} for "{:}""#,
-                decls[1], decls[0], code
-            );
-        }
-        decls.into_iter().next()
-    }
-
     fn qual_ptr(to: DefinableType, qualifiers: TypeQualifiers) -> QualifiedType {
         QualifiedType(QualifiableType::Ptr(Box::new(to)), qualifiers)
     }
@@ -671,91 +689,91 @@ mod tests {
 
     #[test]
     fn test_simple_declaration() {
-        assert_eq!(parse_one_external_declaration(r#""#), None);
+        assert_eq!(parse_external_declarations(r#""#), vec![]);
         assert_eq!(
-            parse_one_external_declaration(r#"abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Int),
                     TypeQualifiers::empty()
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"(abcd);"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"(abcd);"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Int),
                     TypeQualifiers::empty()
                 )),
-            )),
+            )],
         );
         assert_eq!(
-            parse_one_external_declaration(r#"int abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Int),
                     TypeQualifiers::empty()
                 )),
-            ))
+            )]
         );
         assert_eq!(parse_external_declarations(r#"signed long;"#), vec![]);
         assert_eq!(
-            parse_one_external_declaration(r#"unsigned char abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"unsigned char abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::UnsignedChar),
                     TypeQualifiers::empty()
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"*abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"*abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 def_ptr(DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Int),
                     TypeQualifiers::empty()
                 )))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"signed long long int * abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"signed long long int * abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 def_ptr(DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::LongLong),
                     TypeQualifiers::empty()
                 )))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"const short * abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"const short * abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 def_ptr(DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Short),
                     TypeQualifiers::CONST
                 )))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"short const * abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"short const * abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 def_ptr(DefinableType::Qual(QualifiedType(
                     QualifiableType::Prim(PrimitiveType::Short),
                     TypeQualifiers::CONST
                 )))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"float * const abcd;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"float * const abcd;"#),
+            vec![ExternalDecl::Decl(
                 "abcd".to_string(),
                 def_qual_ptr(
                     DefinableType::Qual(QualifiedType(
@@ -764,15 +782,15 @@ mod tests {
                     )),
                     TypeQualifiers::CONST
                 )
-            ))
+            )]
         );
     }
 
     #[test]
     fn test_function_declaration() {
         assert_eq!(
-            parse_one_external_declaration(r#"foo();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"foo();"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
@@ -781,11 +799,11 @@ mod tests {
                     ),
                     FunctionParameters::Undefined
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"void foo(void);"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"void foo(void);"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
@@ -794,11 +812,11 @@ mod tests {
                     ),
                     FunctionParameters::Defined(vec![], false)
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"void foo(int a, char b, ...);"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"void foo(int a, char b, ...);"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
@@ -825,15 +843,15 @@ mod tests {
                         true
                     )
                 ))
-            ))
+            )]
         );
     }
 
     #[test]
     fn test_function_pointer_declaration() {
         assert_eq!(
-            parse_one_external_declaration(r#"int (*foo)();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int (*foo)();"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 def_func_ptr(
                     QualifiedType(
@@ -842,11 +860,11 @@ mod tests {
                     ),
                     FunctionParameters::Undefined
                 )
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"int (*(foo))();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int (*(foo))();"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 def_func_ptr(
                     QualifiedType(
@@ -855,11 +873,11 @@ mod tests {
                     ),
                     FunctionParameters::Undefined
                 )
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"int (*(*bar)())();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int (*(*bar)())();"#),
+            vec![ExternalDecl::Decl(
                 "bar".to_string(),
                 def_func_ptr(
                     func_ptr(
@@ -871,11 +889,11 @@ mod tests {
                     ),
                     FunctionParameters::Undefined
                 )
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"int (*foo())();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int (*foo())();"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Func(FunctionType(
                     func_ptr(
@@ -887,11 +905,11 @@ mod tests {
                     ),
                     FunctionParameters::Undefined
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"char const * (**hogehoge)();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"char const * (**hogehoge)();"#),
+            vec![ExternalDecl::Decl(
                 "hogehoge".to_string(),
                 def_ptr(def_func_ptr(
                     ptr(DefinableType::Qual(QualifiedType(
@@ -900,15 +918,15 @@ mod tests {
                     ))),
                     FunctionParameters::Undefined
                 ))
-            ))
+            )]
         );
     }
 
     #[test]
     fn test_array_declaration() {
         assert_eq!(
-            parse_one_external_declaration(r#"int foo[10];"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"int foo[10];"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Array(ArrayType(
                     ArraySize::Fixed(10),
@@ -917,11 +935,11 @@ mod tests {
                         TypeQualifiers::empty()
                     )))
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"char foo[1][3];"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"char foo[1][3];"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Array(ArrayType(
                     ArraySize::Fixed(1),
@@ -933,12 +951,12 @@ mod tests {
                         )))
                     )))
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            // TODO: Unspecified size arrays should only be used in function parameters
-            parse_one_external_declaration(r#"short foo[];"#),
-            Some(ExternalDecl::Decl(
+            // TODO: Unspecified size arrays should only be usable in function parameters
+            parse_external_declarations(r#"short foo[];"#),
+            vec![ExternalDecl::Decl(
                 "foo".to_string(),
                 DefinableType::Array(ArrayType(
                     ArraySize::Unspecified,
@@ -947,11 +965,11 @@ mod tests {
                         TypeQualifiers::empty()
                     )))
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"char *(*abcdef[3])();"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"char *(*abcdef[3])();"#),
+            vec![ExternalDecl::Decl(
                 "abcdef".to_string(),
                 DefinableType::Array(ArrayType(
                     ArraySize::Fixed(3),
@@ -963,15 +981,15 @@ mod tests {
                         FunctionParameters::Undefined
                     )))
                 ))
-            ))
+            )]
         );
     }
 
     #[test]
     fn test_simple_type_definition() {
         assert_eq!(
-            parse_one_external_declaration(r#"typedef signed *truc();"#),
-            Some(ExternalDecl::TypeDef(
+            parse_external_declarations(r#"typedef signed *truc();"#),
+            vec![ExternalDecl::TypeDef(
                 "truc".to_string(),
                 DefinableType::Func(FunctionType(
                     ptr(DefinableType::Qual(QualifiedType(
@@ -980,7 +998,7 @@ mod tests {
                     ))),
                     FunctionParameters::Undefined
                 ))
-            ))
+            )]
         );
         assert_eq!(
             parse_external_declarations(r#"typedef int *ptr; const ptr foo;"#),
@@ -1105,77 +1123,77 @@ mod tests {
             )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar;"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"enum foo { a, b = 10, c } bar;"#),
+            vec![ExternalDecl::Decl(
                 "bar".to_string(),
                 DefinableType::Qual(QualifiedType(
                     QualifiableType::Tag(
                         Some("foo".to_string()),
                         Tag::Enum(Some(vec![
-                            EnumValue("a".to_string(), 0, None),
-                            EnumValue("b".to_string(), 10, Some(10)),
-                            EnumValue("c".to_string(), 11, None),
+                            EnumValue("a".to_string(), None),
+                            EnumValue("b".to_string(), Some(10)),
+                            EnumValue("c".to_string(), None),
                         ]))
                     ),
                     TypeQualifiers::empty()
                 ))
-            ))
+            )]
         );
         assert_eq!(
-            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar(void);"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"enum foo { a, b = 10, c } bar(void);"#),
+            vec![ExternalDecl::Decl(
                 "bar".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
                         QualifiableType::Tag(
                             Some("foo".to_string()),
                             Tag::Enum(Some(vec![
-                                EnumValue("a".to_string(), 0, None),
-                                EnumValue("b".to_string(), 10, Some(10)),
-                                EnumValue("c".to_string(), 11, None),
+                                EnumValue("a".to_string(), None),
+                                EnumValue("b".to_string(), Some(10)),
+                                EnumValue("c".to_string(), None),
                             ]))
                         ),
                         TypeQualifiers::empty()
                     ),
                     FunctionParameters::Defined(vec![], false)
                 ))
-            ))
+            )]
         );
 
         assert_eq!(
             // unnamed enum
-            parse_one_external_declaration(r#"enum { a, b = 10, c } bar(void);"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"enum { a, b = 10, c } bar(void);"#),
+            vec![ExternalDecl::Decl(
                 "bar".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
                         QualifiableType::Tag(
                             None,
                             Tag::Enum(Some(vec![
-                                EnumValue("a".to_string(), 0, None),
-                                EnumValue("b".to_string(), 10, Some(10)),
-                                EnumValue("c".to_string(), 11, None),
+                                EnumValue("a".to_string(), None),
+                                EnumValue("b".to_string(), Some(10)),
+                                EnumValue("c".to_string(), None),
                             ]))
                         ),
                         TypeQualifiers::empty()
                     ),
                     FunctionParameters::Defined(vec![], false)
                 ))
-            ))
+            )]
         );
         assert_eq!(
             // enum in function parameters - note that in that case the enum is only usable inside the function.
-            parse_one_external_declaration(r#"enum foo { a, b = 10, c } bar(enum hoge { x });"#),
-            Some(ExternalDecl::Decl(
+            parse_external_declarations(r#"enum foo { a, b = 10, c } bar(enum hoge { x });"#),
+            vec![ExternalDecl::Decl(
                 "bar".to_string(),
                 DefinableType::Func(FunctionType(
                     QualifiedType(
                         QualifiableType::Tag(
                             Some("foo".to_string()),
                             Tag::Enum(Some(vec![
-                                EnumValue("a".to_string(), 0, None),
-                                EnumValue("b".to_string(), 10, Some(10)),
-                                EnumValue("c".to_string(), 11, None),
+                                EnumValue("a".to_string(), None),
+                                EnumValue("b".to_string(), Some(10)),
+                                EnumValue("c".to_string(), None),
                             ]))
                         ),
                         TypeQualifiers::empty()
@@ -1186,7 +1204,7 @@ mod tests {
                             Some(ContainableType::Qual(QualifiedType(
                                 QualifiableType::Tag(
                                     Some("hoge".to_string()),
-                                    Tag::Enum(Some(vec![EnumValue("x".to_string(), 0, None)]))
+                                    Tag::Enum(Some(vec![EnumValue("x".to_string(), None)]))
                                 ),
                                 TypeQualifiers::empty()
                             )))
@@ -1194,7 +1212,7 @@ mod tests {
                         false
                     )
                 ))
-            ))
+            )]
         );
         // enum foo { a, b = 10, c };
     }
