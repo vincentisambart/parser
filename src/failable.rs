@@ -116,6 +116,7 @@ pub trait VarRateFailableIterator {
 }
 
 // An adapter from VarRateFailableIterator to a normal (fixed rate) FailableIterator.
+#[allow(dead_code)]
 pub struct FixedRateFailableIterator<I: VarRateFailableIterator> {
     iter: I,
     previous: Option<I::VarRateItemsIter>,
