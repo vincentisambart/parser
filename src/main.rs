@@ -3,6 +3,7 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Make most panics/expect normal errors
+// - Parser probably doesn't need to be var rate anymore
 
 mod failable;
 mod lex;
@@ -62,6 +63,7 @@ enum PrimitiveType {
     Short,
     UnsignedShort,
     Int,
+    SignedInt, // Could be handled differently from Int in bit fields
     UnsignedInt,
     Long,
     UnsignedLong,
@@ -85,7 +87,7 @@ bitflags! {
     }
 }
 
-// TODO: Give name to components (name, real_value, specified_valie)
+// TODO: Give name to components (name, specified_value)
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnumValue(String, Option<u32>);
 
@@ -361,7 +363,7 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 self.iter.advance_if_kw(Keyword::Int)?;
-                Some(PrimitiveType::Int)
+                Some(PrimitiveType::SignedInt)
             }
         } else if self.iter.advance_if_kw(Keyword::Unsigned)? {
             if self.iter.advance_if_kw(Keyword::Char)? {
@@ -993,7 +995,7 @@ mod tests {
                 "truc".to_string(),
                 DefinableType::Func(FunctionType(
                     ptr(DefinableType::Qual(QualifiedType(
-                        QualifiableType::Prim(PrimitiveType::Int),
+                        QualifiableType::Prim(PrimitiveType::SignedInt),
                         TypeQualifiers::empty()
                     ))),
                     FunctionParameters::Undefined
