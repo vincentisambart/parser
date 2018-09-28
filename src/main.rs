@@ -3,8 +3,11 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Make most panics/expect normal errors
-// - Parser probably doesn't need to be var rate anymore
-// - Linkage
+// - Linkage (extern/static)
+// - Base type, storage class (including typedef), function specifier, can be specified in any order
+// - struct/enum/union
+// - Function definition
+// - Variable initialization
 
 mod failable;
 mod lex;
