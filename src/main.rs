@@ -387,12 +387,14 @@ impl<'a> Parser<'a> {
 
     fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
         match self.iter.next()? {
-            Some(PositionedToken(token, position)) => if token == expected_token {
-                Ok(())
-            } else {
-                eprintln!("expecting {:?}, got {:?}", expected_token, token);
-                Err(ParseError::UnexpectedToken(token, position))
-            },
+            Some(PositionedToken(token, position)) => {
+                if token == expected_token {
+                    Ok(())
+                } else {
+                    eprintln!("expecting {:?}, got {:?}", expected_token, token);
+                    Err(ParseError::UnexpectedToken(token, position))
+                }
+            }
             None => Err(ParseError::ExpectingToken(expected_token)),
         }
     }
@@ -529,14 +531,16 @@ impl<'a> Parser<'a> {
         }
         let base_ty = match base_ty {
             Some(ty) => Some(QualifiedType(ty, qualifiers)),
-            None => if qualifiers.is_empty() {
-                None
-            } else {
-                Some(QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Int),
-                    qualifiers,
-                ))
-            },
+            None => {
+                if qualifiers.is_empty() {
+                    None
+                } else {
+                    Some(QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        qualifiers,
+                    ))
+                }
+            }
         };
         Ok(base_ty)
     }
@@ -1114,6 +1118,17 @@ mod tests {
                         })]
                     )
                 ]
+            ))]
+        );
+        assert_eq!(
+            // typedef, basic types keywords can be in any order 😢
+            parse_external_declarations(r#"long typedef long unsigned foo;"#),
+            vec![ExtDecl::TypeDef(Decl(
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::UnsignedLongLong),
+                    TypeQualifiers::empty()
+                ),
+                vec![("foo".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])]
             ))]
         );
     }
