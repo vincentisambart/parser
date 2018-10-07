@@ -7,6 +7,7 @@ pub enum ParseErrorKind {
     UnexpectedChar(char),
     InvalidPreprocDirective,
     InvalidConstruct,
+    InvalidType,
 }
 
 #[derive(Debug, Clone)]

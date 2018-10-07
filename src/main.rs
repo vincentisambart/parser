@@ -16,17 +16,18 @@ mod peeking;
 
 use crate::error::{ParseError, ParseErrorKind};
 use crate::failable::{FailableIterator, FailablePeekable};
-use crate::lex::{Keyword, PositionedToken, Punctuator, Token, TokenIter};
+use crate::lex::{Keyword, Position, PositionedToken, Punctuator, Token, TokenIter};
 
 use bitflags::bitflags;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 trait PeekingToken {
     type Error;
 
     fn advance_if_kw(&mut self, kw: Keyword) -> Result<bool, Self::Error>;
     fn advance_if_punc(&mut self, punc: Punctuator) -> Result<bool, Self::Error>;
-    fn next_if_any_ident(&mut self) -> Result<Option<String>, Self::Error>;
+    fn next_if_any_ident(&mut self) -> Result<Option<(String, Position)>, Self::Error>;
+    fn next_if_any_kw(&mut self) -> Result<Option<(Keyword, Position)>, Self::Error>;
 }
 
 impl<I> PeekingToken for FailablePeekable<I>
@@ -49,13 +50,25 @@ where
         })
     }
 
-    fn next_if_any_ident(&mut self) -> Result<Option<String>, I::Error> {
+    fn next_if_any_ident(&mut self) -> Result<Option<(String, Position)>, I::Error> {
         let token = self.next_if(|token| match token {
             PositionedToken(Token::Identifier(_), _) => true,
             _ => false,
         })?;
         match token {
-            Some(PositionedToken(Token::Identifier(ident), _)) => Ok(Some(ident)),
+            Some(PositionedToken(Token::Identifier(ident), pos)) => Ok(Some((ident, pos))),
+            Some(_) => unreachable!(),
+            None => Ok(None),
+        }
+    }
+
+    fn next_if_any_kw(&mut self) -> Result<Option<(Keyword, Position)>, I::Error> {
+        let token = self.next_if(|token| match token {
+            PositionedToken(Token::Keyword(_), _) => true,
+            _ => false,
+        })?;
+        match token {
+            Some(PositionedToken(Token::Keyword(kw), pos)) => Ok(Some((kw, pos))),
             Some(_) => unreachable!(),
             None => Ok(None),
         }
@@ -243,17 +256,32 @@ impl<'a> Parser<'a> {
         Ok(qual)
     }
 
+    fn read_type_name(&mut self) -> Result<Option<(String, Position)>, ParseError> {
+        let type_manager = &self.type_manager;
+        if let Some(PositionedToken(Token::Identifier(ident), pos)) =
+            self.iter.next_if(|token| match token {
+                PositionedToken(Token::Identifier(ident), _) => {
+                    type_manager.is_type_name(ident.as_ref())
+                }
+                _ => false,
+            })? {
+            Ok(Some((ident, pos)))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn read_type_specifier(&mut self) -> Result<Option<UnqualifiedType>, ParseError> {
         let ty = if let Some(prim) = self.read_basic_type()? {
             Some(UnqualifiedType::Basic(prim))
         } else if self.iter.advance_if_kw(Keyword::Enum)? {
-            let enum_name = self.iter.next_if_any_ident()?;
+            let enum_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
             if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
                 let mut enum_values = Vec::new();
                 loop {
                     if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
                         break;
-                    } else if let Some(value_name) = self.iter.next_if_any_ident()? {
+                    } else if let Some((value_name, _)) = self.iter.next_if_any_ident()? {
                         if self.iter.advance_if_punc(Punctuator::Equal)? {
                             let value = self.read_constant_value()?;
                             enum_values.push(Enumerator(value_name, Some(value)));
@@ -502,7 +530,7 @@ impl<'a> Parser<'a> {
                 current_level = DeclaratorParenLevel::new();
             } else {
                 levels.push(current_level);
-                break self.iter.next_if_any_ident()?;
+                break self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
             }
         };
         for (i, level) in levels.iter_mut().enumerate().rev() {
@@ -521,6 +549,326 @@ impl<'a> Parser<'a> {
             level.append_to(&mut derivs);
         }
         Ok((ident, derivs))
+    }
+
+    fn make_basic_type(
+        type_kw_counts: HashMap<Keyword, u32>,
+        pos: &Position,
+    ) -> Result<BasicType, ParseError> {
+        let basic_type = if type_kw_counts.contains_key(&Keyword::Void) {
+            if type_kw_counts.len() != 1 {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "void cannot be mixed with other type keywords".to_string(),
+                    pos.clone(),
+                ));
+            } else {
+                BasicType::Void
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Bool) {
+            if type_kw_counts.len() != 1 {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "bool cannot be mixed with other type keywords".to_string(),
+                    pos.clone(),
+                ));
+            } else {
+                BasicType::Bool
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Complex) {
+            if type_kw_counts.contains_key(&Keyword::Float) {
+                if type_kw_counts.len() != 2 {
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "float _Complex cannot be mixed with other type keywords".to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    BasicType::FloatComplex
+                }
+            } else if type_kw_counts.contains_key(&Keyword::Double) {
+                if type_kw_counts.contains_key(&Keyword::Long) {
+                    if type_kw_counts.len() != 3 {
+                        return Err(ParseError::new_with_position(
+                            ParseErrorKind::InvalidType,
+                            "long double _Complex cannot be mixed with other type keywords"
+                                .to_string(),
+                            pos.clone(),
+                        ));
+                    } else {
+                        BasicType::LongDoubleComplex
+                    }
+                } else if type_kw_counts.len() != 2 {
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "double _Complex cannot be mixed with type keywords other that long"
+                            .to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    BasicType::DoubleComplex
+                }
+            } else {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "_Complex must be either float, double, or long double".to_string(),
+                    pos.clone(),
+                ));
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Float) {
+            if type_kw_counts.len() != 1 {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "float cannot be mixed with type keywords other than _Complex".to_string(),
+                    pos.clone(),
+                ));
+            } else {
+                BasicType::Float
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Double) {
+            if type_kw_counts.contains_key(&Keyword::Long) {
+                if type_kw_counts.len() != 2 {
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "long double cannot be mixed with type keywords other that _Complex"
+                            .to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    BasicType::LongDouble
+                }
+            } else if type_kw_counts.len() != 1 {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "double _Complex cannot be mixed with type keywords other that long"
+                        .to_string(),
+                    pos.clone(),
+                ));
+            } else {
+                BasicType::Double
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Char) {
+            if type_kw_counts.contains_key(&Keyword::Short)
+                || type_kw_counts.contains_key(&Keyword::Long)
+                || type_kw_counts.contains_key(&Keyword::Int)
+            {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "char cannot be mixed with int, short, or long".to_string(),
+                    pos.clone(),
+                ));
+            }
+            if type_kw_counts.contains_key(&Keyword::Signed) {
+                if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                    assert!(type_kw_counts.len() == 3);
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "an char cannot be both signed and unsigned".to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    assert!(type_kw_counts.len() == 2);
+                    BasicType::SignedChar
+                }
+            } else if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                assert!(type_kw_counts.len() == 2);
+                BasicType::UnsignedChar
+            } else {
+                assert!(type_kw_counts.len() == 1);
+                BasicType::Char
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Short) {
+            // Note that "short" and "short int" are the same.
+            if type_kw_counts.contains_key(&Keyword::Long) {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "short cannot be mixed with long".to_string(),
+                    pos.clone(),
+                ));
+            }
+            if type_kw_counts.contains_key(&Keyword::Signed) {
+                if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                    assert!(type_kw_counts.len() == 3 || type_kw_counts.len() == 4);
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "a short cannot be both signed and unsigned".to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    assert!(type_kw_counts.len() == 2 || type_kw_counts.len() == 3);
+                    BasicType::Short
+                }
+            } else if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                assert!(type_kw_counts.len() == 2 || type_kw_counts.len() == 3);
+                BasicType::UnsignedShort
+            } else {
+                assert!(type_kw_counts.len() == 1);
+                BasicType::Short
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Long) {
+            let long_count = type_kw_counts[&Keyword::Long];
+            assert!(long_count > 0);
+            if long_count > 2 {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "long long long is invalid".to_string(),
+                    pos.clone(),
+                ));
+            }
+            // Note that "long" and "long int" are the same.
+            if type_kw_counts.contains_key(&Keyword::Signed) {
+                if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                    assert!(type_kw_counts.len() == 3 || type_kw_counts.len() == 4);
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "a long cannot be both signed and unsigned".to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    assert!(type_kw_counts.len() == 2 || type_kw_counts.len() == 3);
+                    if long_count == 1 {
+                        BasicType::Long
+                    } else {
+                        BasicType::LongLong
+                    }
+                }
+            } else if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                assert!(type_kw_counts.len() == 2 || type_kw_counts.len() == 3);
+                if long_count == 1 {
+                    BasicType::UnsignedLong
+                } else {
+                    BasicType::UnsignedLongLong
+                }
+            } else {
+                assert!(type_kw_counts.len() == 1);
+                if long_count == 1 {
+                    BasicType::Long
+                } else {
+                    BasicType::LongLong
+                }
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Int) {
+            if type_kw_counts.contains_key(&Keyword::Signed) {
+                if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                    assert!(type_kw_counts.len() == 3);
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidType,
+                        "an int cannot be both signed and unsigned".to_string(),
+                        pos.clone(),
+                    ));
+                } else {
+                    assert!(type_kw_counts.len() == 2);
+                    BasicType::SignedInt
+                }
+            } else if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                assert!(type_kw_counts.len() == 2);
+                BasicType::UnsignedInt
+            } else {
+                assert!(type_kw_counts.len() == 1);
+                BasicType::Int
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Signed) {
+            if type_kw_counts.contains_key(&Keyword::Unsigned) {
+                assert!(type_kw_counts.len() == 2);
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "a value cannot be both signed and unsigned".to_string(),
+                    pos.clone(),
+                ));
+            } else {
+                assert!(type_kw_counts.len() == 1);
+                BasicType::SignedInt
+            }
+        } else if type_kw_counts.contains_key(&Keyword::Unsigned) {
+            assert!(type_kw_counts.len() == 1);
+            BasicType::UnsignedInt
+        } else {
+            unreachable!()
+        };
+        Ok(basic_type)
+    }
+
+    // TODO: Add linkage support (and check that they don't go with a typedef)
+    fn read_decl_spec(&mut self) -> Result<(Option<QualifiedType>, bool), ParseError> {
+        let mut type_kw_counts = HashMap::new();
+        let mut decl_pos = None;
+        let mut type_name = None;
+        let mut type_qual = TypeQualifiers::empty();
+        let mut is_typedef = false;
+        loop {
+            match self.iter.next_if_any_kw()? {
+                Some((kw, pos)) => {
+                    match kw {
+                        Keyword::Typedef => is_typedef = true,
+                        Keyword::Const => type_qual |= TypeQualifiers::CONST,
+                        Keyword::Volatile => type_qual |= TypeQualifiers::CONST,
+                        Keyword::Restrict => type_qual |= TypeQualifiers::CONST,
+                        Keyword::Atomic => type_qual |= TypeQualifiers::CONST,
+                        Keyword::Void
+                        | Keyword::Int
+                        | Keyword::Long
+                        | Keyword::Short
+                        | Keyword::Char
+                        | Keyword::Signed
+                        | Keyword::Unsigned
+                        | Keyword::Double
+                        | Keyword::Float
+                        | Keyword::Bool
+                        | Keyword::Complex => {
+                            type_kw_counts
+                                .entry(kw)
+                                .and_modify(|count| *count += 1)
+                                .or_insert(1);
+                        }
+                        kw => {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                format!("unexpected keyword {:?} in declaration", kw),
+                                pos,
+                            ))
+                        }
+                    };
+                    decl_pos = Some(pos.clone());
+                }
+                None => match self.read_type_name()? {
+                    Some((ident, pos)) => {
+                        decl_pos = Some(pos);
+                        type_name = Some(ident);
+                    }
+                    None => break,
+                },
+            }
+        }
+        let unqual_type = if let Some(type_name) = type_name {
+            let pos = decl_pos.expect("if we have a type name, we must have a position");
+            if !type_kw_counts.is_empty() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    format!(
+                        "a declaration cannot have both a basic type and a custom type {}",
+                        type_name
+                    ),
+                    pos,
+                ));
+            }
+            Some(UnqualifiedType::Custom(type_name))
+        } else {
+            if type_kw_counts.is_empty() {
+                if type_qual.is_empty() {
+                    None
+                } else {
+                    Some(UnqualifiedType::Basic(BasicType::Int))
+                }
+            } else {
+                let basic_type =
+                    Self::make_basic_type(type_kw_counts, &decl_pos.as_ref().unwrap())?;
+                Some(UnqualifiedType::Basic(basic_type))
+            }
+        };
+        Ok((
+            unqual_type.map(|unqual_type| QualifiedType(unqual_type, type_qual)),
+            is_typedef,
+        ))
     }
 
     fn read_declaration_specifier(&mut self) -> Result<Option<QualifiedType>, ParseError> {
