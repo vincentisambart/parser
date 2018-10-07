@@ -704,6 +704,7 @@ impl<'a> Parser<'a> {
         let mut type_qual = TypeQualifiers::empty();
         let mut tag = None;
         let mut is_typedef = false;
+        let mut has_useless_kw = false;
         loop {
             match self.iter.next_if_any_kw()? {
                 Some((kw, pos)) => {
@@ -713,6 +714,8 @@ impl<'a> Parser<'a> {
                         Keyword::Volatile => type_qual |= TypeQualifiers::CONST,
                         Keyword::Restrict => type_qual |= TypeQualifiers::CONST,
                         Keyword::Atomic => type_qual |= TypeQualifiers::CONST,
+                        // auto and register don't mean anything anymore
+                        Keyword::Auto | Keyword::Register => has_useless_kw = true,
                         Keyword::Void
                         | Keyword::Int
                         | Keyword::Long
@@ -779,18 +782,15 @@ impl<'a> Parser<'a> {
                 ));
             }
             Some(tag)
-        } else {
-            if type_kw_counts.is_empty() {
-                if type_qual.is_empty() {
-                    None
-                } else {
-                    Some(UnqualifiedType::Basic(BasicType::Int))
-                }
+        } else if type_kw_counts.is_empty() {
+            if type_qual.is_empty() && !has_useless_kw {
+                None
             } else {
-                let basic_type =
-                    Self::make_basic_type(type_kw_counts, &decl_pos.as_ref().unwrap())?;
-                Some(UnqualifiedType::Basic(basic_type))
+                Some(UnqualifiedType::Basic(BasicType::Int))
             }
+        } else {
+            let basic_type = Self::make_basic_type(type_kw_counts, &decl_pos.as_ref().unwrap())?;
+            Some(UnqualifiedType::Basic(basic_type))
         };
         Ok((
             unqual_type.map(|unqual_type| QualifiedType(unqual_type, type_qual)),
