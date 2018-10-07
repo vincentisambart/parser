@@ -3,9 +3,8 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Make most panics/expect normal errors
-// - Linkage (extern/static)
-// - Base type, storage class (including typedef), function specifier, can be specified in any order
-// - struct/enum/union
+// - Storage class (including typedef), function specifier
+// - struct/union
 // - Function definition
 // - Variable initialization
 
@@ -271,134 +270,34 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn read_type_specifier(&mut self) -> Result<Option<UnqualifiedType>, ParseError> {
-        let ty = if let Some(prim) = self.read_basic_type()? {
-            Some(UnqualifiedType::Basic(prim))
-        } else if self.iter.advance_if_kw(Keyword::Enum)? {
-            let enum_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
-            if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
-                let mut enum_values = Vec::new();
-                loop {
+    fn read_enum(&mut self) -> Result<UnqualifiedType, ParseError> {
+        let enum_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
+        let unqual_type = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+            let mut enum_values = Vec::new();
+            loop {
+                if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                    break;
+                } else if let Some((value_name, _)) = self.iter.next_if_any_ident()? {
+                    if self.iter.advance_if_punc(Punctuator::Equal)? {
+                        let value = self.read_constant_value()?;
+                        enum_values.push(Enumerator(value_name, Some(value)));
+                    } else {
+                        enum_values.push(Enumerator(value_name, None));
+                    }
                     if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
                         break;
-                    } else if let Some((value_name, _)) = self.iter.next_if_any_ident()? {
-                        if self.iter.advance_if_punc(Punctuator::Equal)? {
-                            let value = self.read_constant_value()?;
-                            enum_values.push(Enumerator(value_name, Some(value)));
-                        } else {
-                            enum_values.push(Enumerator(value_name, None));
-                        }
-                        if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
-                            break;
-                        } else {
-                            self.expect_token(Token::Punctuator(Punctuator::Comma))?;
-                        }
                     } else {
-                        panic!("invalid enum decl");
+                        self.expect_token(Token::Punctuator(Punctuator::Comma))?;
                     }
+                } else {
+                    panic!("invalid enum decl");
                 }
-                Some(UnqualifiedType::Tag(
-                    enum_name,
-                    Tag::Enum(Some(enum_values)),
-                ))
-            } else {
-                Some(UnqualifiedType::Tag(enum_name, Tag::Enum(None)))
             }
+            UnqualifiedType::Tag(enum_name, Tag::Enum(Some(enum_values)))
         } else {
-            let type_manager = &self.type_manager;
-            if let Some(PositionedToken(Token::Identifier(ident), _)) =
-                self.iter.next_if(|token| match token {
-                    PositionedToken(Token::Identifier(ident), _) => {
-                        type_manager.is_type_name(ident.as_ref())
-                    }
-                    _ => false,
-                })? {
-                Some(UnqualifiedType::Custom(ident))
-            } else {
-                None
-            }
+            UnqualifiedType::Tag(enum_name, Tag::Enum(None))
         };
-        Ok(ty)
-    }
-
-    fn read_basic_type(&mut self) -> Result<Option<BasicType>, ParseError> {
-        let ty = if self.iter.advance_if_kw(Keyword::Void)? {
-            Some(BasicType::Void)
-        } else if self.iter.advance_if_kw(Keyword::Char)? {
-            Some(BasicType::Char)
-        } else if self.iter.advance_if_kw(Keyword::Signed)? {
-            if self.iter.advance_if_kw(Keyword::Char)? {
-                Some(BasicType::SignedChar)
-            } else if self.iter.advance_if_kw(Keyword::Short)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::Short)
-            } else if self.iter.advance_if_kw(Keyword::Long)? {
-                if self.iter.advance_if_kw(Keyword::Long)? {
-                    self.iter.advance_if_kw(Keyword::Int)?;
-                    Some(BasicType::LongLong)
-                } else {
-                    self.iter.advance_if_kw(Keyword::Int)?;
-                    Some(BasicType::Long)
-                }
-            } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::SignedInt)
-            }
-        } else if self.iter.advance_if_kw(Keyword::Unsigned)? {
-            if self.iter.advance_if_kw(Keyword::Char)? {
-                Some(BasicType::UnsignedChar)
-            } else if self.iter.advance_if_kw(Keyword::Short)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::UnsignedShort)
-            } else if self.iter.advance_if_kw(Keyword::Long)? {
-                if self.iter.advance_if_kw(Keyword::Long)? {
-                    self.iter.advance_if_kw(Keyword::Int)?;
-                    Some(BasicType::UnsignedLongLong)
-                } else {
-                    self.iter.advance_if_kw(Keyword::Int)?;
-                    Some(BasicType::UnsignedLong)
-                }
-            } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::UnsignedInt)
-            }
-        } else if self.iter.advance_if_kw(Keyword::Short)? {
-            self.iter.advance_if_kw(Keyword::Int)?;
-            Some(BasicType::Short)
-        } else if self.iter.advance_if_kw(Keyword::Int)? {
-            Some(BasicType::Int)
-        } else if self.iter.advance_if_kw(Keyword::Long)? {
-            if self.iter.advance_if_kw(Keyword::Long)? {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::LongLong)
-            } else if self.iter.advance_if_kw(Keyword::Double)? {
-                if self.iter.advance_if_kw(Keyword::Complex)? {
-                    Some(BasicType::LongDoubleComplex)
-                } else {
-                    Some(BasicType::LongDouble)
-                }
-            } else {
-                self.iter.advance_if_kw(Keyword::Int)?;
-                Some(BasicType::Long)
-            }
-        } else if self.iter.advance_if_kw(Keyword::Float)? {
-            if self.iter.advance_if_kw(Keyword::Complex)? {
-                Some(BasicType::FloatComplex)
-            } else {
-                Some(BasicType::Float)
-            }
-        } else if self.iter.advance_if_kw(Keyword::Double)? {
-            if self.iter.advance_if_kw(Keyword::Complex)? {
-                Some(BasicType::DoubleComplex)
-            } else {
-                Some(BasicType::Double)
-            }
-        } else if self.iter.advance_if_kw(Keyword::Bool)? {
-            Some(BasicType::Bool)
-        } else {
-            None
-        };
-        Ok(ty)
+        Ok(unqual_type)
     }
 
     fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
@@ -435,7 +334,14 @@ impl<'a> Parser<'a> {
         let mut is_first_param = true;
         let mut is_variadic = false;
         loop {
-            let decl_spec = self.read_declaration_specifier()?;
+            let (decl_spec, decl_pos, is_typedef) = self.read_decl_spec()?;
+            if is_typedef {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidConstruct,
+                    "a function parameter cannot contain a typedef".to_string(),
+                    decl_pos.expect("a typedef should have a position"),
+                ));
+            }
             if is_first_param {
                 if let Some(QualifiedType(UnqualifiedType::Basic(BasicType::Void), qualifiers)) =
                     decl_spec
@@ -789,11 +695,14 @@ impl<'a> Parser<'a> {
     }
 
     // TODO: Add linkage support (and check that they don't go with a typedef)
-    fn read_decl_spec(&mut self) -> Result<(Option<QualifiedType>, bool), ParseError> {
+    fn read_decl_spec(
+        &mut self,
+    ) -> Result<(Option<QualifiedType>, Option<Position>, bool), ParseError> {
         let mut type_kw_counts = HashMap::new();
         let mut decl_pos = None;
         let mut type_name = None;
         let mut type_qual = TypeQualifiers::empty();
+        let mut tag = None;
         let mut is_typedef = false;
         loop {
             match self.iter.next_if_any_kw()? {
@@ -820,6 +729,16 @@ impl<'a> Parser<'a> {
                                 .and_modify(|count| *count += 1)
                                 .or_insert(1);
                         }
+                        Keyword::Enum => {
+                            if tag.is_some() {
+                                return Err(ParseError::new_with_position(
+                                    ParseErrorKind::InvalidConstruct,
+                                    "a declaration can only have one tag declaration".to_string(),
+                                    pos,
+                                ));
+                            }
+                            tag = Some(self.read_enum()?);
+                        }
                         kw => {
                             return Err(ParseError::new_with_position(
                                 ParseErrorKind::InvalidConstruct,
@@ -840,18 +759,26 @@ impl<'a> Parser<'a> {
             }
         }
         let unqual_type = if let Some(type_name) = type_name {
-            let pos = decl_pos.expect("if we have a type name, we must have a position");
-            if !type_kw_counts.is_empty() {
+            if !type_kw_counts.is_empty() || tag.is_some() {
                 return Err(ParseError::new_with_position(
                     ParseErrorKind::InvalidType,
                     format!(
                         "a declaration cannot have both a basic type and a custom type {}",
                         type_name
                     ),
-                    pos,
+                    decl_pos.expect("if we have a tag, we must have a position"),
                 ));
             }
             Some(UnqualifiedType::Custom(type_name))
+        } else if let Some(tag) = tag {
+            if !type_kw_counts.is_empty() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "a declaration cannot have both a basic type and a tag type".to_string(),
+                    decl_pos.expect("if we have a tag, we must have a position"),
+                ));
+            }
+            Some(tag)
         } else {
             if type_kw_counts.is_empty() {
                 if type_qual.is_empty() {
@@ -867,33 +794,9 @@ impl<'a> Parser<'a> {
         };
         Ok((
             unqual_type.map(|unqual_type| QualifiedType(unqual_type, type_qual)),
+            decl_pos,
             is_typedef,
         ))
-    }
-
-    fn read_declaration_specifier(&mut self) -> Result<Option<QualifiedType>, ParseError> {
-        let mut qualifiers = TypeQualifiers::empty();
-        while let Some(qualifier) = self.read_type_qualifier()? {
-            qualifiers |= qualifier;
-        }
-        let base_ty = self.read_type_specifier()?;
-        while let Some(qualifier) = self.read_type_qualifier()? {
-            qualifiers |= qualifier;
-        }
-        let base_ty = match base_ty {
-            Some(ty) => Some(QualifiedType(ty, qualifiers)),
-            None => {
-                if qualifiers.is_empty() {
-                    None
-                } else {
-                    Some(QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        qualifiers,
-                    ))
-                }
-            }
-        };
-        Ok(base_ty)
     }
 }
 
@@ -905,8 +808,8 @@ impl<'a> FailableIterator for Parser<'a> {
         if self.iter.peek()?.is_none() {
             return Ok(None);
         }
-        let is_typedef = self.iter.advance_if_kw(Keyword::Typedef)?;
-        let decl_spec = self.read_declaration_specifier()?.unwrap_or_else(|| {
+        let (decl_spec, _, is_typedef) = self.read_decl_spec()?;
+        let decl_spec = decl_spec.unwrap_or_else(|| {
             QualifiedType(
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty(),
@@ -1484,17 +1387,17 @@ mod tests {
                 ]
             ))]
         );
-        // assert_eq!(
-        //     // typedef, basic types keywords can be in any order 😢
-        //     parse_external_declarations(r#"long typedef long unsigned foo;"#),
-        //     vec![ExtDecl::TypeDef(Decl(
-        //         QualifiedType(
-        //             UnqualifiedType::Basic(BasicType::UnsignedLongLong),
-        //             TypeQualifiers::empty()
-        //         ),
-        //         vec![("foo".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])]
-        //     ))]
-        // );
+        assert_eq!(
+            // typedef, basic types keywords can be in any order 😢
+            parse_external_declarations(r#"long typedef long unsigned foo;"#),
+            vec![ExtDecl::TypeDef(Decl(
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::UnsignedLongLong),
+                    TypeQualifiers::empty()
+                ),
+                vec![("foo".to_string(), vec![])]
+            ))]
+        );
     }
 
     #[test]
