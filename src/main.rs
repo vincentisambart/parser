@@ -171,6 +171,19 @@ enum ExtDecl {
     // FuncDef(FuncDef),
 }
 
+#[derive(Debug, Clone)]
+enum DeclSpec {
+    Decl {
+        qual_type: QualifiedType,
+        pos: Position,
+        linkage: Option<Linkage>,
+    },
+    TypeDef {
+        qual_type: QualifiedType,
+        pos: Position,
+    },
+}
+
 struct TypeManager {
     types_stack: Vec<HashSet<String>>,
 }
@@ -287,7 +300,7 @@ impl<'a> Parser<'a> {
                     if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
                         break;
                     } else {
-                        self.expect_token(Token::Punctuator(Punctuator::Comma))?;
+                        self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
                     }
                 } else {
                     panic!("invalid enum decl");
@@ -300,10 +313,10 @@ impl<'a> Parser<'a> {
         Ok(unqual_type)
     }
 
-    fn expect_token(&mut self, expected_token: Token) -> Result<(), ParseError> {
+    fn expect_token(&mut self, expected_token: &Token) -> Result<(), ParseError> {
         match self.iter.next()? {
             Some(PositionedToken(token, position)) => {
-                if token == expected_token {
+                if token == *expected_token {
                     Ok(())
                 } else {
                     let message = format!("expecting {:?}, got {:?}", expected_token, token);
@@ -334,17 +347,33 @@ impl<'a> Parser<'a> {
         let mut is_first_param = true;
         let mut is_variadic = false;
         loop {
-            let (decl_spec, decl_pos, is_typedef) = self.read_decl_spec()?;
-            if is_typedef {
-                return Err(ParseError::new_with_position(
-                    ParseErrorKind::InvalidConstruct,
-                    "a function parameter cannot contain a typedef".to_string(),
-                    decl_pos.expect("a typedef should have a position"),
-                ));
-            }
+            let root_type = match self.read_decl_spec()? {
+                Some(DeclSpec::TypeDef { pos, .. }) => {
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidConstruct,
+                        "a function parameter cannot contain a typedef".to_string(),
+                        pos,
+                    ));
+                }
+                Some(DeclSpec::Decl {
+                    qual_type,
+                    pos,
+                    linkage,
+                }) => {
+                    if linkage.is_some() {
+                        return Err(ParseError::new_with_position(
+                            ParseErrorKind::InvalidConstruct,
+                            "a function parameter cannot be extern or static".to_string(),
+                            pos,
+                        ));
+                    }
+                    Some(qual_type)
+                }
+                None => None,
+            };
             if is_first_param {
                 if let Some(QualifiedType(UnqualifiedType::Basic(BasicType::Void), qualifiers)) =
-                    decl_spec
+                    root_type
                 {
                     if qualifiers.is_empty()
                         && self.iter.advance_if_punc(Punctuator::RightParenthesis)?
@@ -356,20 +385,20 @@ impl<'a> Parser<'a> {
             }
 
             let (ident, derivs) = self.read_declarator()?;
-            let param = if decl_spec.is_none() && derivs.is_empty() {
+            let param = if root_type.is_none() && derivs.is_empty() {
                 // No type
                 if ident.is_none() {
                     panic!("Should have at least an identifier or a type");
                 }
                 FuncParam(ident, None)
             } else {
-                let decl_spec = decl_spec.unwrap_or_else(|| {
+                let root_type = root_type.unwrap_or_else(|| {
                     QualifiedType(
                         UnqualifiedType::Basic(BasicType::Int),
                         TypeQualifiers::empty(),
                     )
                 });
-                FuncParam(ident, Some(DerivedType(decl_spec, derivs)))
+                FuncParam(ident, Some(DerivedType(root_type, derivs)))
             };
             params.push(param);
 
@@ -377,11 +406,11 @@ impl<'a> Parser<'a> {
             if self.iter.advance_if_punc(Punctuator::Comma)? {
                 if self.iter.advance_if_punc(Punctuator::Ellipsis)? {
                     is_variadic = true;
-                    self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                    self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
                     break;
                 }
             } else {
-                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
                 break;
             }
         }
@@ -417,7 +446,7 @@ impl<'a> Parser<'a> {
         }
 
         let size = self.read_constant_value()?;
-        self.expect_token(Token::Punctuator(Punctuator::RightSquareBracket))?;
+        self.expect_token(&Token::Punctuator(Punctuator::RightSquareBracket))?;
         Ok(ArraySize::Fixed(size))
     }
 
@@ -447,7 +476,7 @@ impl<'a> Parser<'a> {
                 level.array_sizes.push(self.read_array_size()?);
             }
             if i != 0 {
-                self.expect_token(Token::Punctuator(Punctuator::RightParenthesis))?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
             }
         }
         let mut derivs = Vec::new();
@@ -691,13 +720,12 @@ impl<'a> Parser<'a> {
         } else {
             unreachable!()
         };
+        drop(type_kw_counts);
         Ok(basic_type)
     }
 
     // TODO: Add linkage support (and check that they don't go with a typedef)
-    fn read_decl_spec(
-        &mut self,
-    ) -> Result<(Option<QualifiedType>, Option<Position>, bool), ParseError> {
+    fn read_decl_spec(&mut self) -> Result<Option<DeclSpec>, ParseError> {
         let mut type_kw_counts = HashMap::new();
         let mut decl_pos = None;
         let mut type_name = None;
@@ -705,6 +733,7 @@ impl<'a> Parser<'a> {
         let mut tag = None;
         let mut is_typedef = false;
         let mut has_useless_kw = false;
+        let mut linkage = None;
         loop {
             match self.iter.next_if_any_kw()? {
                 Some((kw, pos)) => {
@@ -742,6 +771,26 @@ impl<'a> Parser<'a> {
                             }
                             tag = Some(self.read_enum()?);
                         }
+                        Keyword::Extern => {
+                            if linkage == Some(Linkage::Internal) {
+                                return Err(ParseError::new_with_position(
+                                    ParseErrorKind::InvalidConstruct,
+                                    "a declaration cannot be both extern and static".to_string(),
+                                    pos,
+                                ));
+                            }
+                            linkage = Some(Linkage::External);
+                        }
+                        Keyword::Static => {
+                            if linkage == Some(Linkage::External) {
+                                return Err(ParseError::new_with_position(
+                                    ParseErrorKind::InvalidConstruct,
+                                    "a declaration cannot be both extern and static".to_string(),
+                                    pos,
+                                ));
+                            }
+                            linkage = Some(Linkage::Internal);
+                        }
                         kw => {
                             return Err(ParseError::new_with_position(
                                 ParseErrorKind::InvalidConstruct,
@@ -761,6 +810,19 @@ impl<'a> Parser<'a> {
                 },
             }
         }
+        let decl_pos = match decl_pos {
+            Some(decl_pos) => decl_pos,
+            None => {
+                assert!(
+                    !is_typedef
+                        && type_kw_counts.is_empty()
+                        && linkage.is_none()
+                        && tag.is_none()
+                        && !has_useless_kw
+                );
+                return Ok(None);
+            }
+        };
         let unqual_type = if let Some(type_name) = type_name {
             if !type_kw_counts.is_empty() || tag.is_some() {
                 return Err(ParseError::new_with_position(
@@ -769,34 +831,46 @@ impl<'a> Parser<'a> {
                         "a declaration cannot have both a basic type and a custom type {}",
                         type_name
                     ),
-                    decl_pos.expect("if we have a tag, we must have a position"),
+                    decl_pos,
                 ));
             }
-            Some(UnqualifiedType::Custom(type_name))
+            UnqualifiedType::Custom(type_name)
         } else if let Some(tag) = tag {
             if !type_kw_counts.is_empty() {
                 return Err(ParseError::new_with_position(
                     ParseErrorKind::InvalidType,
                     "a declaration cannot have both a basic type and a tag type".to_string(),
-                    decl_pos.expect("if we have a tag, we must have a position"),
+                    decl_pos,
                 ));
             }
-            Some(tag)
+            tag
         } else if type_kw_counts.is_empty() {
-            if type_qual.is_empty() && !has_useless_kw {
-                None
-            } else {
-                Some(UnqualifiedType::Basic(BasicType::Int))
+            UnqualifiedType::Basic(BasicType::Int)
+        } else {
+            let basic_type = Self::make_basic_type(type_kw_counts, &decl_pos)?;
+            UnqualifiedType::Basic(basic_type)
+        };
+        let qual_type = QualifiedType(unqual_type, type_qual);
+        let decl_spec = if is_typedef {
+            if linkage.is_some() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "a typedef cannot use static or extern".to_string(),
+                    decl_pos,
+                ));
+            }
+            DeclSpec::TypeDef {
+                qual_type,
+                pos: decl_pos,
             }
         } else {
-            let basic_type = Self::make_basic_type(type_kw_counts, &decl_pos.as_ref().unwrap())?;
-            Some(UnqualifiedType::Basic(basic_type))
+            DeclSpec::Decl {
+                qual_type,
+                linkage,
+                pos: decl_pos,
+            }
         };
-        Ok((
-            unqual_type.map(|unqual_type| QualifiedType(unqual_type, type_qual)),
-            decl_pos,
-            is_typedef,
-        ))
+        Ok(Some(decl_spec))
     }
 }
 
@@ -808,13 +882,11 @@ impl<'a> FailableIterator for Parser<'a> {
         if self.iter.peek()?.is_none() {
             return Ok(None);
         }
-        let (decl_spec, _, is_typedef) = self.read_decl_spec()?;
-        let decl_spec = decl_spec.unwrap_or_else(|| {
-            QualifiedType(
-                UnqualifiedType::Basic(BasicType::Int),
-                TypeQualifiers::empty(),
-            )
-        });
+        let decl_spec = self.read_decl_spec()?;
+        let is_typedef = match &decl_spec {
+            Some(DeclSpec::TypeDef { .. }) => true,
+            _ => false,
+        };
 
         let mut declarators = Vec::new();
         if !self.iter.advance_if_punc(Punctuator::Semicolon)? {
@@ -822,12 +894,8 @@ impl<'a> FailableIterator for Parser<'a> {
                 let (ident, derivs) = self.read_declarator()?;
                 let ident = ident.expect("A decl should have an identifier");
 
-                if is_typedef {
-                    if !self.type_manager.add_type_to_current_scope(ident.clone()) {
-                        panic!(
-                            "You should not redefine a type already defined in the current scope"
-                        );
-                    }
+                if is_typedef && !self.type_manager.add_type_to_current_scope(ident.clone()) {
+                    panic!("You should not redefine a type already defined in the current scope");
                 }
                 declarators.push((ident, derivs));
 
@@ -855,10 +923,23 @@ impl<'a> FailableIterator for Parser<'a> {
             }
         }
 
-        let ext_decl = if is_typedef {
-            ExtDecl::TypeDef(Decl(decl_spec, declarators))
-        } else {
-            ExtDecl::Decl(None, Decl(decl_spec, declarators))
+        let ext_decl = match decl_spec {
+            Some(DeclSpec::TypeDef { qual_type, .. }) => {
+                ExtDecl::TypeDef(Decl(qual_type, declarators))
+            }
+            Some(DeclSpec::Decl {
+                qual_type, linkage, ..
+            }) => ExtDecl::Decl(linkage, Decl(qual_type, declarators)),
+            None => ExtDecl::Decl(
+                None,
+                Decl(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        TypeQualifiers::empty(),
+                    ),
+                    declarators,
+                ),
+            ),
         };
         Ok(Some(ext_decl))
     }
