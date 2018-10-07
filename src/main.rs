@@ -3,7 +3,6 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Make most panics/expect normal errors
-// - Storage class (including typedef), function specifier
 // - struct/union
 // - Function definition
 // - Variable initialization
@@ -107,6 +106,13 @@ bitflags! {
     }
 }
 
+bitflags! {
+    struct FuncSpecifiers: u8 {
+        const INLINE   = 1;
+        const NORETURN = 1 << 1;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Enumerator(String, Option<u32>);
 
@@ -177,6 +183,8 @@ enum DeclSpec {
         qual_type: QualifiedType,
         pos: Position,
         linkage: Option<Linkage>,
+        func_specifiers: FuncSpecifiers,
+        is_thread_local: bool,
     },
     TypeDef {
         qual_type: QualifiedType,
@@ -359,6 +367,7 @@ impl<'a> Parser<'a> {
                     qual_type,
                     pos,
                     linkage,
+                    ..
                 }) => {
                     if linkage.is_some() {
                         return Err(ParseError::new_with_position(
@@ -724,7 +733,6 @@ impl<'a> Parser<'a> {
         Ok(basic_type)
     }
 
-    // TODO: Add linkage support (and check that they don't go with a typedef)
     fn read_decl_spec(&mut self) -> Result<Option<DeclSpec>, ParseError> {
         let mut type_kw_counts = HashMap::new();
         let mut decl_pos = None;
@@ -734,6 +742,8 @@ impl<'a> Parser<'a> {
         let mut is_typedef = false;
         let mut has_useless_kw = false;
         let mut linkage = None;
+        let mut is_thread_local = false;
+        let mut func_specifiers = FuncSpecifiers::empty();
         loop {
             match self.iter.next_if_any_kw()? {
                 Some((kw, pos)) => {
@@ -791,6 +801,9 @@ impl<'a> Parser<'a> {
                             }
                             linkage = Some(Linkage::Internal);
                         }
+                        Keyword::Noreturn => func_specifiers |= FuncSpecifiers::NORETURN,
+                        Keyword::Inline => func_specifiers |= FuncSpecifiers::INLINE,
+                        Keyword::ThreadLocal => is_thread_local = true,
                         kw => {
                             return Err(ParseError::new_with_position(
                                 ParseErrorKind::InvalidConstruct,
@@ -859,6 +872,20 @@ impl<'a> Parser<'a> {
                     decl_pos,
                 ));
             }
+            if !func_specifiers.is_empty() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "a typedef cannot use inline or _Noreturn".to_string(),
+                    decl_pos,
+                ));
+            }
+            if is_thread_local {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidType,
+                    "a typedef cannot use _Thread_local".to_string(),
+                    decl_pos,
+                ));
+            }
             DeclSpec::TypeDef {
                 qual_type,
                 pos: decl_pos,
@@ -868,6 +895,8 @@ impl<'a> Parser<'a> {
                 qual_type,
                 linkage,
                 pos: decl_pos,
+                func_specifiers,
+                is_thread_local,
             }
         };
         Ok(Some(decl_spec))
