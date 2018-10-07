@@ -32,11 +32,13 @@ where
         F: FnMut(&I::Item) -> bool,
     {
         match self.peek() {
-            Some(x) => if predicate(x) {
-                self.next()
-            } else {
-                None
-            },
+            Some(x) => {
+                if predicate(x) {
+                    self.next()
+                } else {
+                    None
+                }
+            }
             None => None,
         }
     }

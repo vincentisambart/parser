@@ -50,11 +50,13 @@ impl<I: FailableIterator> FailablePeekable<I> {
         F: FnMut(&I::Item) -> bool,
     {
         match self.peek()? {
-            Some(x) => if predicate(x) {
-                self.next()
-            } else {
-                Ok(None)
-            },
+            Some(x) => {
+                if predicate(x) {
+                    self.next()
+                } else {
+                    Ok(None)
+                }
+            }
             None => Ok(None),
         }
     }

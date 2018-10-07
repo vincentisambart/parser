@@ -1,13 +1,14 @@
 // TODO:
-// - tests
 // - maybe use Rc for strings in tokens
 // - maybe support universal character names
 // - maybe support other non-ascii identifiers (check what clang does)
 // - handle more preprocessing directives (#error, unknown #pragma should be an error...)
 // - merge succession of string literals into one
 
+use crate::error::{ParseError, ParseErrorKind};
 use crate::failable::FailableIterator;
 use crate::peeking::Peeking;
+
 use lazy_static::lazy_static;
 use std::char;
 use std::collections::HashMap;
@@ -316,13 +317,6 @@ lazy_static! {
     };
 }
 
-#[derive(Debug, Clone)]
-pub enum LexError {
-    UnexpectedEOF(Position),
-    UnexpectedChar(char, Position),
-    InvalidPreprocDirective(Position),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     IntegerLiteral(String, IntegerRepr, Option<IntegerSuffix>),
@@ -362,7 +356,7 @@ impl<'a> TokenIter<'a> {
         }
     }
 
-    fn read_number_literal(&mut self) -> Result<Token, LexError> {
+    fn read_number_literal(&mut self) -> Result<Token, ParseError> {
         let mut token = String::new();
 
         if self.scanner.advance_if(any_of!('0')) {
@@ -470,9 +464,12 @@ impl<'a> TokenIter<'a> {
     }
 
     // The list of escapes comes from clang's LiteralSupport.cpp
-    fn read_char_escape(&mut self) -> Result<char, LexError> {
+    fn read_char_escape(&mut self) -> Result<char, ParseError> {
         match self.scanner.next() {
-            None => Err(LexError::UnexpectedEOF(self.position.clone())),
+            None => Err(ParseError::new(
+                ParseErrorKind::UnexpectedEOF,
+                "unfinished character escape at end of file".to_string(),
+            )),
             Some('a') => Ok('\x07'),             // bell
             Some('b') => Ok('\x08'),             // backspace
             Some('e') | Some('E') => Ok('\x1b'), // escape
@@ -518,7 +515,7 @@ impl<'a> TokenIter<'a> {
         }
     }
 
-    fn read_char_literal(&mut self, prefix: Option<CharPrefix>) -> Result<Token, LexError> {
+    fn read_char_literal(&mut self, prefix: Option<CharPrefix>) -> Result<Token, ParseError> {
         self.scanner
             .next_if(any_of!('\''))
             .expect("read_char_literal should only be called when next character is \"'\"");
@@ -528,12 +525,26 @@ impl<'a> TokenIter<'a> {
                 Token::CharLiteral(c, prefix)
             }
             Some(c) => Token::CharLiteral(c, prefix),
-            None => return Err(LexError::UnexpectedEOF(self.position.clone())),
+            None => {
+                return Err(ParseError::new(
+                    ParseErrorKind::UnexpectedEOF,
+                    "unfinished character literal at the end of the file".to_string(),
+                ))
+            }
         };
         match self.scanner.next() {
             Some('\'') => Ok(t),
-            Some(c) => Err(LexError::UnexpectedChar(c, self.position.clone())),
-            None => Err(LexError::UnexpectedEOF(self.position.clone())),
+            // TODO: We might want to allow multi-characters constants (at least FourCCs)
+            // https://stackoverflow.com/a/47312044
+            Some(c) => Err(ParseError::new_with_position(
+                ParseErrorKind::UnexpectedChar(c),
+                "a character literal should only have one character".to_string(),
+                self.position.clone(),
+            )),
+            None => Err(ParseError::new(
+                ParseErrorKind::UnexpectedEOF,
+                "unfinished character literal at the end of the file".to_string(),
+            )),
         }
     }
 
@@ -547,7 +558,7 @@ impl<'a> TokenIter<'a> {
         }
     }
 
-    fn read_string_literal(&mut self, prefix: Option<StringPrefix>) -> Result<Token, LexError> {
+    fn read_string_literal(&mut self, prefix: Option<StringPrefix>) -> Result<Token, ParseError> {
         self.scanner
             .next_if(any_of!('"'))
             .expect("read_string_literal should only be called when next character is '\"'");
@@ -562,32 +573,51 @@ impl<'a> TokenIter<'a> {
                     string.push(c);
                 }
                 Some(c) => string.push(c),
-                None => break Err(LexError::UnexpectedEOF(self.position.clone())),
+                None => {
+                    break Err(ParseError::new(
+                        ParseErrorKind::UnexpectedEOF,
+                        "unfinished string literal at the end of the file".to_string(),
+                    ))
+                }
             }
         }
     }
 
-    fn handle_preprocessing_directive(&mut self, directive: &[Token]) -> Result<(), LexError> {
+    fn handle_preprocessing_directive(&mut self, directive: &[Token]) -> Result<(), ParseError> {
         let mut iter = directive.iter();
         match iter.next() {
             None => (), // empty preprocessing directive
             Some(Token::Identifier(identifier)) => match identifier.as_str() {
                 // Handle "#line 1 file" as "#1 file"
                 "line" => return self.handle_preprocessing_directive(&directive[1..]),
-                _ => return Err(LexError::InvalidPreprocDirective(self.position.clone())),
+                _ => {
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidPreprocDirective,
+                        "#line is currently the only handled preprocessing directive".to_string(),
+                        self.position.clone(),
+                    ))
+                }
             },
-            Some(Token::IntegerLiteral(literal, IntegerRepr::Dec, _)) => {
-                let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), 10) {
+            Some(Token::IntegerLiteral(literal, repr, _)) => {
+                let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), repr.radix()) {
                     number
                 } else {
-                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidPreprocDirective,
+                        "invalid line number in line number preprocessing directive".to_string(),
+                        self.position.clone(),
+                    ));
                 };
 
                 let file_path;
                 if let Some(Token::StringLiteral(text, None)) = iter.next() {
                     file_path = text;
                 } else {
-                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidPreprocDirective,
+                        "invalid file name in line number preprocessing directive".to_string(),
+                        self.position.clone(),
+                    ));
                 }
                 self.position.line = line;
                 self.position.file_path = Rc::new(file_path.clone());
@@ -595,16 +625,30 @@ impl<'a> TokenIter<'a> {
                 for token in iter {
                     match token {
                         Token::IntegerLiteral(_, _, _) => (),
-                        _ => return Err(LexError::InvalidPreprocDirective(self.position.clone())),
+                        _ => {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidPreprocDirective,
+                                "a line number preprocessing directive should end with numbers"
+                                    .to_string(),
+                                self.position.clone(),
+                            ))
+                        }
                     }
                 }
             }
-            _ => return Err(LexError::InvalidPreprocDirective(self.position.clone())),
+            _ => {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidPreprocDirective,
+                    "a preprocessing directive should start with a number or an identifier"
+                        .to_string(),
+                    self.position.clone(),
+                ))
+            }
         }
         Ok(())
     }
 
-    fn read_punctuator(&mut self) -> Result<Token, LexError> {
+    fn read_punctuator(&mut self) -> Result<Token, ParseError> {
         let punc = match self
             .scanner
             .next()
@@ -786,13 +830,19 @@ impl<'a> TokenIter<'a> {
             ',' => Punctuator::Comma,
             // Objective-C
             '@' => Punctuator::At,
-            c => return Err(LexError::UnexpectedChar(c, self.position.clone())),
+            c => {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::UnexpectedChar(c),
+                    format!("unexpected character {}", c),
+                    self.position.clone(),
+                ))
+            }
         };
         Ok(Token::Punctuator(punc))
     }
 
     // Should only be called when we're sure there's a next token (or an error)
-    fn next_token(&mut self) -> Result<Token, LexError> {
+    fn next_token(&mut self) -> Result<Token, ParseError> {
         let token = if self.scanner.peeking_does_match(char::is_ascii_digit) {
             self.read_number_literal()?
         } else if self.scanner.peeking_does_match(any_of!('\'')) {
@@ -853,9 +903,9 @@ enum EndKind {
 
 impl<'a> FailableIterator for TokenIter<'a> {
     type Item = PositionedToken;
-    type Error = LexError;
+    type Error = ParseError;
 
-    fn next(&mut self) -> Result<Option<PositionedToken>, LexError> {
+    fn next(&mut self) -> Result<Option<PositionedToken>, ParseError> {
         if let Some(token) = self.next_token_to_return.take() {
             return Ok(Some(PositionedToken(token, self.position.clone())));
         }
@@ -891,7 +941,11 @@ impl<'a> FailableIterator for TokenIter<'a> {
             let token = self.next_token()?;
             if token == Token::Punctuator(Punctuator::Hash) {
                 if !self.is_start_of_line {
-                    return Err(LexError::InvalidPreprocDirective(self.position.clone()));
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidPreprocDirective,
+                        "a processing directive should be at the start of a line".to_string(),
+                        self.position.clone(),
+                    ));
                 } else {
                     preprocessing_directive = Some(Vec::new());
                     self.is_start_of_line = false;
