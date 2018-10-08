@@ -2,7 +2,6 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
-// - Make most panics/expect normal errors
 // - struct/union
 // - Function definition
 // - Variable initialization
@@ -291,7 +290,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn read_enum(&mut self) -> Result<UnqualifiedType, ParseError> {
+    fn read_enum(&mut self, pos: &Position) -> Result<UnqualifiedType, ParseError> {
         let enum_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
         let unqual_type = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
             let mut enum_values = Vec::new();
@@ -311,7 +310,11 @@ impl<'a> Parser<'a> {
                         self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
                     }
                 } else {
-                    panic!("invalid enum decl");
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidConstruct,
+                        "invalid enum declaration".to_string(),
+                        pos.clone(),
+                    ));
                 }
             }
             UnqualifiedType::Tag(enum_name, Tag::Enum(Some(enum_values)))
@@ -342,6 +345,13 @@ impl<'a> Parser<'a> {
                     expected_token
                 ),
             )),
+        }
+    }
+
+    fn next_token_pos(&mut self) -> Result<Option<Position>, ParseError> {
+        match self.iter.peek()? {
+            Some(PositionedToken(_, pos)) => Ok(Some(pos.clone())),
+            None => Ok(None),
         }
     }
 
@@ -397,7 +407,22 @@ impl<'a> Parser<'a> {
             let param = if root_type.is_none() && derivs.is_empty() {
                 // No type
                 if ident.is_none() {
-                    panic!("Should have at least an identifier or a type");
+                    match self.next_token_pos()? {
+                        Some(pos) => {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a declaration should have at least an identifier or a type"
+                                    .to_string(),
+                                pos.clone(),
+                            ))
+                        }
+                        None => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::UnexpectedEOF,
+                                "unfinished declaration at the end of the file".to_string(),
+                            ))
+                        }
+                    }
                 }
                 FuncParam(ident, None)
             } else {
@@ -779,7 +804,7 @@ impl<'a> Parser<'a> {
                                     pos,
                                 ));
                             }
-                            tag = Some(self.read_enum()?);
+                            tag = Some(self.read_enum(&pos)?);
                         }
                         Keyword::Extern => {
                             if linkage == Some(Linkage::Internal) {
@@ -921,10 +946,34 @@ impl<'a> FailableIterator for Parser<'a> {
         if !self.iter.advance_if_punc(Punctuator::Semicolon)? {
             loop {
                 let (ident, derivs) = self.read_declarator()?;
-                let ident = ident.expect("A decl should have an identifier");
+                let ident = match ident {
+                    Some(ident) => ident,
+                    None => {
+                        return Err(match self.next_token_pos()? {
+                            Some(pos) => ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a declaration should have an identifier".to_string(),
+                                pos,
+                            ),
+                            None => ParseError::new(
+                                ParseErrorKind::UnexpectedEOF,
+                                "unfinished declaration at the end of the file".to_string(),
+                            ),
+                        })
+                    }
+                };
 
                 if is_typedef && !self.type_manager.add_type_to_current_scope(ident.clone()) {
-                    panic!("You should not redefine a type already defined in the current scope");
+                    let pos = if let Some(DeclSpec::TypeDef { pos, .. }) = decl_spec {
+                        pos
+                    } else {
+                        unreachable!();
+                    };
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::InvalidConstruct,
+                        format!("trying to redefine the already defined type {}", ident),
+                        pos,
+                    ));
                 }
                 declarators.push((ident, derivs));
 
