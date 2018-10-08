@@ -3,10 +3,9 @@
 // - maybe support universal character names
 // - maybe support other non-ascii identifiers (check what clang does)
 // - handle more preprocessing directives (#error, unknown #pragma should be an error...)
-// - merge succession of string literals into one
 
 use crate::error::{ParseError, ParseErrorKind};
-use crate::failable::FailableIterator;
+use crate::failable::{FailableIterator, FailablePeekable};
 use crate::peeking::Peeking;
 
 use lazy_static::lazy_static;
@@ -332,7 +331,7 @@ pub enum Token {
 #[derive(Debug, Clone)]
 pub struct PositionedToken(pub Token, pub Position);
 
-pub struct TokenIter<'a> {
+struct BasicTokenIter<'a> {
     scanner: Peekable<Chars<'a>>,
     position: Position,
     is_start_of_line: bool,
@@ -340,14 +339,14 @@ pub struct TokenIter<'a> {
     next_token_to_return: Option<Token>,
 }
 
-impl<'a> TokenIter<'a> {
-    pub fn from(code: &'a str) -> TokenIter<'a> {
+impl<'a> BasicTokenIter<'a> {
+    fn from(code: &'a str) -> BasicTokenIter<'a> {
         let scanner = code.chars().peekable();
         let position = Position {
             file_path: Rc::new("<unknown>".to_string()),
             line: 1,
         };
-        TokenIter {
+        BasicTokenIter {
             scanner,
             position,
             is_start_of_line: true,
@@ -871,15 +870,14 @@ impl<'a> TokenIter<'a> {
             } else {
                 match self.scanner.peek() {
                     Some('\'') => {
-                        if let Some(prefix) = TokenIter::char_literal_prefix(identifier.as_str()) {
+                        if let Some(prefix) = Self::char_literal_prefix(identifier.as_str()) {
                             self.read_char_literal(Some(prefix))?
                         } else {
                             Token::Identifier(identifier)
                         }
                     }
                     Some('\"') => {
-                        if let Some(prefix) = TokenIter::string_literal_prefix(identifier.as_str())
-                        {
+                        if let Some(prefix) = Self::string_literal_prefix(identifier.as_str()) {
                             self.read_string_literal(Some(prefix))?
                         } else {
                             Token::Identifier(identifier)
@@ -901,7 +899,7 @@ enum EndKind {
     File,
 }
 
-impl<'a> FailableIterator for TokenIter<'a> {
+impl<'a> FailableIterator for BasicTokenIter<'a> {
     type Item = PositionedToken;
     type Error = ParseError;
 
@@ -966,6 +964,60 @@ impl<'a> FailableIterator for TokenIter<'a> {
     }
 }
 
+pub struct TokenIter<'a> {
+    iter: FailablePeekable<BasicTokenIter<'a>>,
+}
+
+impl<'a> TokenIter<'a> {
+    pub fn from(code: &'a str) -> TokenIter<'a> {
+        TokenIter {
+            iter: BasicTokenIter::from(code).peekable(),
+        }
+    }
+}
+
+impl<'a> FailableIterator for TokenIter<'a> {
+    type Item = PositionedToken;
+    type Error = ParseError;
+
+    fn next(&mut self) -> Result<Option<PositionedToken>, ParseError> {
+        Ok(match self.iter.next()? {
+            // merge adjacent string literals
+            Some(PositionedToken(Token::StringLiteral(mut literal, mut prefix), pos)) => loop {
+                match self.iter.peek()? {
+                    Some(PositionedToken(Token::StringLiteral(_, _), _)) => {
+                        if let Some(PositionedToken(
+                            Token::StringLiteral(following_literal, following_prefix),
+                            following_position,
+                        )) = self.iter.next()?
+                        {
+                            if prefix != following_prefix {
+                                if prefix.is_some() {
+                                    if following_prefix.is_some() {
+                                        return Err(ParseError::new_with_position(
+                                            ParseErrorKind::InvalidConstruct,
+                                            "adjacent string literals must use the same prefix"
+                                                .to_string(),
+                                            following_position,
+                                        ));
+                                    }
+                                } else {
+                                    prefix = following_prefix;
+                                }
+                            }
+                            literal.push_str(following_literal.as_ref());
+                        } else {
+                            unreachable!();
+                        }
+                    }
+                    _ => break Some(PositionedToken(Token::StringLiteral(literal, prefix), pos)),
+                }
+            },
+            next => next,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,6 +1059,24 @@ mod tests {
         assert_eq!(
             parse_one_valid_token(r#""\x61\0\0123""#),
             Token::StringLiteral("a\0\n3".to_string(), None),
+        );
+        assert_eq!(
+            parse_one_valid_token(r#""abcd" "efgh" "ijkl""#),
+            Token::StringLiteral("abcdefghijkl".to_string(), None),
+        );
+        // adjacent string literal must all have the same prefix
+        // (if there's no prefix it becomes the prefix or the adjacent string)
+        assert_eq!(
+            parse_one_valid_token(r#"u"abcd" u"efgh""#),
+            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::Char16)),
+        );
+        assert_eq!(
+            parse_one_valid_token(r#""abcd" U"efgh""#),
+            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::Char32)),
+        );
+        assert_eq!(
+            parse_one_valid_token(r#"L"abcd" "efgh""#),
+            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::WChar)),
         );
     }
 
