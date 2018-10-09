@@ -2,7 +2,6 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
-// - struct/union
 // - Function definition
 // - Variable initialization
 
@@ -112,14 +111,19 @@ bitflags! {
     }
 }
 
+type ConstExpr = u32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Enumerator(String, Option<u32>);
+struct Enumerator(String, Option<ConstExpr>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagFieldDecl(QualifiedType, Vec<(String, Vec<Deriv>, Option<ConstExpr>)>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tag {
     Enum(Option<Vec<Enumerator>>),
-    // Struct,
-    // Union,
+    Struct(Option<Vec<TagFieldDecl>>),
+    Union(Option<Vec<TagFieldDecl>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,7 +139,7 @@ struct QualifiedType(UnqualifiedType, TypeQualifiers);
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ArraySize {
     Unspecified,
-    Fixed(u32),
+    Fixed(ConstExpr),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,7 +323,118 @@ impl<'a> Parser<'a> {
             }
             UnqualifiedType::Tag(enum_name, Tag::Enum(Some(enum_values)))
         } else {
+            if enum_name.is_none() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidConstruct,
+                    "an enum declaration must have either a name or the list of values".to_string(),
+                    pos.clone(),
+                ));
+            }
             UnqualifiedType::Tag(enum_name, Tag::Enum(None))
+        };
+        Ok(unqual_type)
+    }
+
+    fn read_union_or_struct<F>(
+        &mut self,
+        pos: &Position,
+        builder: F,
+    ) -> Result<UnqualifiedType, ParseError>
+    where
+        F: Fn(Option<Vec<TagFieldDecl>>) -> Tag,
+    {
+        let struct_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
+        let unqual_type = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+            let mut struct_field_decls = Vec::new();
+            loop {
+                if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                    break;
+                }
+                let root_type = match self.read_decl_spec()? {
+                    Some(DeclSpec::TypeDef { pos, .. }) => {
+                        return Err(ParseError::new_with_position(
+                            ParseErrorKind::InvalidConstruct,
+                            "a struct field cannot contain a typedef".to_string(),
+                            pos,
+                        ));
+                    }
+                    Some(DeclSpec::Decl {
+                        qual_type,
+                        pos,
+                        linkage,
+                        ..
+                    }) => {
+                        if linkage.is_some() {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a struct field cannot be extern or static".to_string(),
+                                pos,
+                            ));
+                        }
+                        qual_type
+                    }
+                    None => {
+                        return Err(ParseError::new_with_position(
+                            ParseErrorKind::InvalidConstruct,
+                            "a struct field requires a type".to_string(),
+                            pos.clone(),
+                        ))
+                    }
+                };
+                let mut fields = Vec::new();
+                let mut did_finish_struct = false;
+                loop {
+                    if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                        did_finish_struct = true;
+                        break;
+                    } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                        break;
+                    }
+
+                    let (ident, derivs) = self.read_declarator()?;
+                    let ident = if let Some(ident) = ident {
+                        ident
+                    } else {
+                        return Err(ParseError::new_with_position(
+                            ParseErrorKind::InvalidConstruct,
+                            "a struct field requires a name in most cases".to_string(),
+                            pos.clone(),
+                        ));
+                    };
+
+                    let bit_size = if self.iter.advance_if_punc(Punctuator::Colon)? {
+                        Some(self.read_constant_value()?)
+                    } else {
+                        None
+                    };
+
+                    fields.push((ident, derivs, bit_size));
+
+                    if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                        did_finish_struct = true;
+                        break;
+                    } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                        break;
+                    } else {
+                        self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
+                    }
+                }
+                struct_field_decls.push(TagFieldDecl(root_type, fields));
+                if did_finish_struct {
+                    break;
+                }
+            }
+            UnqualifiedType::Tag(struct_name, builder(Some(struct_field_decls)))
+        } else {
+            if struct_name.is_none() {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidConstruct,
+                    "a struct declaration must have either a name or the list of fields"
+                        .to_string(),
+                    pos.clone(),
+                ));
+            }
+            UnqualifiedType::Tag(struct_name, builder(None))
         };
         Ok(unqual_type)
     }
@@ -456,7 +571,7 @@ impl<'a> Parser<'a> {
     }
 
     // TODO: The return value should be the AST of an expression
-    fn read_constant_value(&mut self) -> Result<u32, ParseError> {
+    fn read_constant_value(&mut self) -> Result<ConstExpr, ParseError> {
         match self.iter.next()? {
             Some(PositionedToken(Token::IntegerLiteral(literal, repr, _), _)) => {
                 Ok(u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap())
@@ -796,7 +911,7 @@ impl<'a> Parser<'a> {
                                 .and_modify(|count| *count += 1)
                                 .or_insert(1);
                         }
-                        Keyword::Enum => {
+                        Keyword::Enum | Keyword::Struct | Keyword::Union => {
                             if tag.is_some() {
                                 return Err(ParseError::new_with_position(
                                     ParseErrorKind::InvalidConstruct,
@@ -804,7 +919,12 @@ impl<'a> Parser<'a> {
                                     pos,
                                 ));
                             }
-                            tag = Some(self.read_enum(&pos)?);
+                            tag = Some(match kw {
+                                Keyword::Enum => self.read_enum(&pos)?,
+                                Keyword::Struct => self.read_union_or_struct(&pos, Tag::Struct)?,
+                                Keyword::Union => self.read_union_or_struct(&pos, Tag::Union)?,
+                                _ => unreachable!(),
+                            });
                         }
                         Keyword::Extern => {
                             if linkage == Some(Linkage::Internal) {
@@ -1718,6 +1838,118 @@ mod tests {
                         TypeQualifiers::empty()
                     ),
                     vec![]
+                )
+            )]
+        );
+        assert_eq!(
+            parse_external_declarations(r#"struct foo { int a : 1, b; };"#),
+            vec![ExtDecl::Decl(
+                None,
+                Decl(
+                    QualifiedType(
+                        UnqualifiedType::Tag(
+                            Some("foo".to_string()),
+                            Tag::Struct(Some(vec![TagFieldDecl(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Int),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![
+                                    ("a".to_string(), vec![], Some(1)),
+                                    ("b".to_string(), vec![], None),
+                                ]
+                            )]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
+                )
+            )]
+        );
+        // self-referencing struct
+        assert_eq!(
+            parse_external_declarations(r#"struct s { struct s *next };"#),
+            vec![ExtDecl::Decl(
+                None,
+                Decl(
+                    QualifiedType(
+                        UnqualifiedType::Tag(
+                            Some("s".to_string()),
+                            Tag::Struct(Some(vec![TagFieldDecl(
+                                QualifiedType(
+                                    UnqualifiedType::Tag(Some("s".to_string()), Tag::Struct(None)),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![(
+                                    "next".to_string(),
+                                    vec![Deriv::Ptr(TypeQualifiers::empty())],
+                                    None
+                                )]
+                            )]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
+                )
+            )]
+        );
+        assert_eq!(
+            parse_external_declarations(
+                r#"union { int x : 2; struct { int a, *b }; char * const z } foo;"#
+            ),
+            vec![ExtDecl::Decl(
+                None,
+                Decl(
+                    QualifiedType(
+                        UnqualifiedType::Tag(
+                            None,
+                            Tag::Union(Some(vec![
+                                TagFieldDecl(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Int),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![("x".to_string(), vec![], Some(2)),]
+                                ),
+                                TagFieldDecl(
+                                    QualifiedType(
+                                        UnqualifiedType::Tag(
+                                            None,
+                                            Tag::Struct(Some(vec![TagFieldDecl(
+                                                QualifiedType(
+                                                    UnqualifiedType::Basic(BasicType::Int),
+                                                    TypeQualifiers::empty()
+                                                ),
+                                                vec![
+                                                    ("a".to_string(), vec![], None),
+                                                    (
+                                                        "b".to_string(),
+                                                        vec![Deriv::Ptr(TypeQualifiers::empty())],
+                                                        None
+                                                    )
+                                                ]
+                                            )]))
+                                        ),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![]
+                                ),
+                                TagFieldDecl(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Char),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![(
+                                        "z".to_string(),
+                                        vec![Deriv::Ptr(TypeQualifiers::CONST)],
+                                        None
+                                    )]
+                                )
+                            ]))
+                        ),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![("foo".to_string(), vec![])]
                 )
             )]
         );
