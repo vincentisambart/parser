@@ -165,7 +165,16 @@ enum Deriv {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Decl(QualifiedType, Vec<(String, Vec<Deriv>)>);
+struct TypeDecl(QualifiedType, Vec<(String, Vec<Deriv>)>);
+
+// TODO: Rename, as it can be also a function declaration
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Decl(
+    Option<Linkage>,
+    QualifiedType,
+    Vec<(String, Vec<Deriv>)>,
+    Option<ConstExpr>,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Linkage {
@@ -175,8 +184,8 @@ enum Linkage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExtDecl {
-    Decl(Option<Linkage>, Decl),
-    TypeDef(Decl),
+    Decl(Decl),
+    TypeDef(TypeDecl),
     // FuncDef(FuncDef),
 }
 
@@ -1123,21 +1132,20 @@ impl<'a> FailableIterator for Parser<'a> {
 
         let ext_decl = match decl_spec {
             Some(DeclSpec::TypeDef { qual_type, .. }) => {
-                ExtDecl::TypeDef(Decl(qual_type, declarators))
+                ExtDecl::TypeDef(TypeDecl(qual_type, declarators))
             }
             Some(DeclSpec::Decl {
                 qual_type, linkage, ..
-            }) => ExtDecl::Decl(linkage, Decl(qual_type, declarators)),
-            None => ExtDecl::Decl(
+            }) => ExtDecl::Decl(Decl(linkage, qual_type, declarators, None)),
+            None => ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty(),
-                    ),
-                    declarators,
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty(),
                 ),
-            ),
+                declarators,
+                None,
+            )),
         };
         Ok(Some(ext_decl))
     }
@@ -1160,145 +1168,135 @@ mod tests {
         assert_eq!(parse_external_declarations(r#""#), vec![]);
         assert_eq!(
             parse_external_declarations(r#"abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("abcd".to_string(), vec![])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("abcd".to_string(), vec![])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"(abcd);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("abcd".to_string(), vec![])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("abcd".to_string(), vec![])],
+                None,
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"int abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("abcd".to_string(), vec![])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("abcd".to_string(), vec![])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"signed long;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Long),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Long),
+                    TypeQualifiers::empty()
+                ),
+                vec![],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"unsigned char abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::UnsignedChar),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("abcd".to_string(), vec![])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::UnsignedChar),
+                    TypeQualifiers::empty()
+                ),
+                vec![("abcd".to_string(), vec![])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"*abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "abcd".to_string(),
-                        vec![Deriv::Ptr(TypeQualifiers::empty())]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "abcd".to_string(),
+                    vec![Deriv::Ptr(TypeQualifiers::empty())]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"signed long long int * abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::LongLong),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "abcd".to_string(),
-                        vec![Deriv::Ptr(TypeQualifiers::empty())]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::LongLong),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "abcd".to_string(),
+                    vec![Deriv::Ptr(TypeQualifiers::empty())]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"const short * abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Short),
-                        TypeQualifiers::CONST
-                    ),
-                    vec![(
-                        "abcd".to_string(),
-                        vec![Deriv::Ptr(TypeQualifiers::empty())]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Short),
+                    TypeQualifiers::CONST
+                ),
+                vec![(
+                    "abcd".to_string(),
+                    vec![Deriv::Ptr(TypeQualifiers::empty())]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"short const * abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Short),
-                        TypeQualifiers::CONST
-                    ),
-                    vec![(
-                        "abcd".to_string(),
-                        vec![Deriv::Ptr(TypeQualifiers::empty())]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Short),
+                    TypeQualifiers::CONST
+                ),
+                vec![(
+                    "abcd".to_string(),
+                    vec![Deriv::Ptr(TypeQualifiers::empty())]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"float * const abcd;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Float),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("abcd".to_string(), vec![Deriv::Ptr(TypeQualifiers::CONST)])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Float),
+                    TypeQualifiers::empty()
+                ),
+                vec![("abcd".to_string(), vec![Deriv::Ptr(TypeQualifiers::CONST)])],
+                None
+            ))]
         );
     }
 
@@ -1306,75 +1304,72 @@ mod tests {
     fn test_function_declaration() {
         assert_eq!(
             parse_external_declarations(r#"foo();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("foo".to_string(), vec![Deriv::Func(FuncParams::Undef)])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("foo".to_string(), vec![Deriv::Func(FuncParams::Undef)])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"void foo(void);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Void),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![],
-                            is_variadic: false
-                        })]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"void foo(int a, char b, ...);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Void),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![
-                                FuncParam(
-                                    Some("a".to_string()),
-                                    Some(DerivedType(
-                                        QualifiedType(
-                                            UnqualifiedType::Basic(BasicType::Int),
-                                            TypeQualifiers::empty()
-                                        ),
-                                        vec![]
-                                    ))
-                                ),
-                                FuncParam(
-                                    Some("b".to_string()),
-                                    Some(DerivedType(
-                                        QualifiedType(
-                                            UnqualifiedType::Basic(BasicType::Char),
-                                            TypeQualifiers::empty()
-                                        ),
-                                        vec![]
-                                    ))
-                                )
-                            ],
-                            is_variadic: true
-                        })]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![
+                            FuncParam(
+                                Some("a".to_string()),
+                                Some(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Int),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![]
+                                ))
+                            ),
+                            FuncParam(
+                                Some("b".to_string()),
+                                Some(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Char),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![]
+                                ))
+                            )
+                        ],
+                        is_variadic: true
+                    })]
+                )],
+                None
+            ))]
         );
     }
 
@@ -1382,103 +1377,98 @@ mod tests {
     fn test_function_pointer_declaration() {
         assert_eq!(
             parse_external_declarations(r#"int (*foo)();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty())
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty())
+                    ]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"int (*(foo))();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty())
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty())
+                    ]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"int (*(*bar)())();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "bar".to_string(),
-                        vec![
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty())
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "bar".to_string(),
+                    vec![
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty())
+                    ]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"int (*foo())();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Func(FuncParams::Undef)
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Func(FuncParams::Undef)
+                    ]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"char const * (**hogehoge)();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Char),
-                        TypeQualifiers::CONST
-                    ),
-                    vec![(
-                        "hogehoge".to_string(),
-                        vec![
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Ptr(TypeQualifiers::empty())
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Char),
+                    TypeQualifiers::CONST
+                ),
+                vec![(
+                    "hogehoge".to_string(),
+                    vec![
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Ptr(TypeQualifiers::empty())
+                    ]
+                )],
+                None
+            ))]
         );
     }
 
@@ -1486,86 +1476,82 @@ mod tests {
     fn test_array_declaration() {
         assert_eq!(
             parse_external_declarations(r#"int foo[10];"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Int),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("foo".to_string(), vec![Deriv::Array(ArraySize::Fixed(10))])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("foo".to_string(), vec![Deriv::Array(ArraySize::Fixed(10))])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"char foo[1][3];"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Char),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "foo".to_string(),
-                        vec![
-                            Deriv::Array(ArraySize::Fixed(3)),
-                            Deriv::Array(ArraySize::Fixed(1))
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Char),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![
+                        Deriv::Array(ArraySize::Fixed(3)),
+                        Deriv::Array(ArraySize::Fixed(1))
+                    ]
+                )],
+                None
+            ))]
         );
 
         assert_eq!(
             // Unspecified size arrays should only in function parameters
             parse_external_declarations(r#"void bar(short foo[]);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Void),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "bar".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![FuncParam(
-                                Some("foo".to_string()),
-                                Some(DerivedType(
-                                    QualifiedType(
-                                        UnqualifiedType::Basic(BasicType::Short),
-                                        TypeQualifiers::empty()
-                                    ),
-                                    vec![Deriv::Array(ArraySize::Unspecified)]
-                                ))
-                            )],
-                            is_variadic: false
-                        })]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "bar".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![FuncParam(
+                            Some("foo".to_string()),
+                            Some(DerivedType(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Short),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![Deriv::Array(ArraySize::Unspecified)]
+                            ))
+                        )],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"char *(*abcdef[3])();"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Basic(BasicType::Char),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![(
-                        "abcdef".to_string(),
-                        vec![
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Func(FuncParams::Undef),
-                            Deriv::Ptr(TypeQualifiers::empty()),
-                            Deriv::Array(ArraySize::Fixed(3))
-                        ]
-                    )]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Char),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "abcdef".to_string(),
+                    vec![
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Array(ArraySize::Fixed(3))
+                    ]
+                )],
+                None
+            ))]
         );
     }
 
@@ -1573,7 +1559,7 @@ mod tests {
     fn test_simple_type_definition() {
         assert_eq!(
             parse_external_declarations(r#"typedef signed *truc();"#),
-            vec![ExtDecl::TypeDef(Decl(
+            vec![ExtDecl::TypeDef(TypeDecl(
                 QualifiedType(
                     UnqualifiedType::Basic(BasicType::SignedInt),
                     TypeQualifiers::empty()
@@ -1590,29 +1576,28 @@ mod tests {
         assert_eq!(
             parse_external_declarations(r#"typedef int *ptr; const ptr foo;"#),
             vec![
-                ExtDecl::TypeDef(Decl(
+                ExtDecl::TypeDef(TypeDecl(
                     QualifiedType(
                         UnqualifiedType::Basic(BasicType::Int),
                         TypeQualifiers::empty()
                     ),
                     vec![("ptr".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])]
                 )),
-                ExtDecl::Decl(
+                ExtDecl::Decl(Decl(
                     None,
-                    Decl(
-                        QualifiedType(
-                            UnqualifiedType::Custom("ptr".to_string()),
-                            TypeQualifiers::CONST
-                        ),
-                        vec![("foo".to_string(), vec![])]
-                    )
-                )
+                    QualifiedType(
+                        UnqualifiedType::Custom("ptr".to_string()),
+                        TypeQualifiers::CONST
+                    ),
+                    vec![("foo".to_string(), vec![])],
+                    None
+                ))
             ]
         );
         assert_eq!(
             parse_external_declarations(r#"typedef int i, *ptr; ptr foo, *bar;"#),
             vec![
-                ExtDecl::TypeDef(Decl(
+                ExtDecl::TypeDef(TypeDecl(
                     QualifiedType(
                         UnqualifiedType::Basic(BasicType::Int),
                         TypeQualifiers::empty()
@@ -1622,25 +1607,24 @@ mod tests {
                         ("ptr".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])
                     ]
                 )),
-                ExtDecl::Decl(
+                ExtDecl::Decl(Decl(
                     None,
-                    Decl(
-                        QualifiedType(
-                            UnqualifiedType::Custom("ptr".to_string()),
-                            TypeQualifiers::empty()
-                        ),
-                        vec![
-                            ("foo".to_string(), vec![]),
-                            ("bar".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])
-                        ]
-                    )
-                )
+                    QualifiedType(
+                        UnqualifiedType::Custom("ptr".to_string()),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![
+                        ("foo".to_string(), vec![]),
+                        ("bar".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])
+                    ],
+                    None
+                ))
             ]
         );
         assert_eq!(
             // A typed declared and used in one typedef
             parse_external_declarations(r#"typedef int *foo, bar(foo x);"#),
-            vec![ExtDecl::TypeDef(Decl(
+            vec![ExtDecl::TypeDef(TypeDecl(
                 QualifiedType(
                     UnqualifiedType::Basic(BasicType::Int),
                     TypeQualifiers::empty()
@@ -1669,7 +1653,7 @@ mod tests {
         assert_eq!(
             // typedef, basic types keywords can be in any order 😢
             parse_external_declarations(r#"long typedef long unsigned foo;"#),
-            vec![ExtDecl::TypeDef(Decl(
+            vec![ExtDecl::TypeDef(TypeDecl(
                 QualifiedType(
                     UnqualifiedType::Basic(BasicType::UnsignedLongLong),
                     TypeQualifiers::empty()
@@ -1683,275 +1667,262 @@ mod tests {
     fn test_tag_definition() {
         assert_eq!(
             parse_external_declarations(r#"enum foo;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
+                    TypeQualifiers::empty()
+                ),
+                vec![],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"enum foo bar;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
-                        TypeQualifiers::empty()
-                    ),
-                    vec![("bar".to_string(), vec![])]
-                )
-            )]
+                QualifiedType(
+                    UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
+                    TypeQualifiers::empty()
+                ),
+                vec![("bar".to_string(), vec![])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"enum foo { a, b = 10, c } bar;"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("foo".to_string()),
-                            Tag::Enum(Some(vec![
-                                Enumerator("a".to_string(), None),
-                                Enumerator("b".to_string(), Some(10)),
-                                Enumerator("c".to_string(), None),
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Enum(Some(vec![
+                            Enumerator("a".to_string(), None),
+                            Enumerator("b".to_string(), Some(10)),
+                            Enumerator("c".to_string(), None),
+                        ]))
                     ),
-                    vec![("bar".to_string(), vec![])]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![("bar".to_string(), vec![])],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"enum foo { a, b = 10, c } bar(void);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("foo".to_string()),
-                            Tag::Enum(Some(vec![
-                                Enumerator("a".to_string(), None),
-                                Enumerator("b".to_string(), Some(10)),
-                                Enumerator("c".to_string(), None),
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Enum(Some(vec![
+                            Enumerator("a".to_string(), None),
+                            Enumerator("b".to_string(), Some(10)),
+                            Enumerator("c".to_string(), None),
+                        ]))
                     ),
-                    vec![(
-                        "bar".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![],
-                            is_variadic: false
-                        })]
-                    )]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "bar".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"enum { a, b = 10, c } bar(void);"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            None,
-                            Tag::Enum(Some(vec![
-                                Enumerator("a".to_string(), None),
-                                Enumerator("b".to_string(), Some(10)),
-                                Enumerator("c".to_string(), None),
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        None,
+                        Tag::Enum(Some(vec![
+                            Enumerator("a".to_string(), None),
+                            Enumerator("b".to_string(), Some(10)),
+                            Enumerator("c".to_string(), None),
+                        ]))
                     ),
-                    vec![(
-                        "bar".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![],
-                            is_variadic: false
-                        })]
-                    )]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "bar".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             // enum in function parameters - note that in that case the enum is only usable inside the function.
             parse_external_declarations(r#"enum foo { a, b = 10, c } bar(enum hoge { x });"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("foo".to_string()),
-                            Tag::Enum(Some(vec![
-                                Enumerator("a".to_string(), None),
-                                Enumerator("b".to_string(), Some(10)),
-                                Enumerator("c".to_string(), None),
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Enum(Some(vec![
+                            Enumerator("a".to_string(), None),
+                            Enumerator("b".to_string(), Some(10)),
+                            Enumerator("c".to_string(), None),
+                        ]))
                     ),
-                    vec![(
-                        "bar".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
-                            params: vec![FuncParam(
-                                None,
-                                Some(DerivedType(
-                                    QualifiedType(
-                                        UnqualifiedType::Tag(
-                                            Some("hoge".to_string()),
-                                            Tag::Enum(Some(vec![Enumerator(
-                                                "x".to_string(),
-                                                None
-                                            )]))
-                                        ),
-                                        TypeQualifiers::empty()
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "bar".to_string(),
+                    vec![Deriv::Func(FuncParams::Defined {
+                        params: vec![FuncParam(
+                            None,
+                            Some(DerivedType(
+                                QualifiedType(
+                                    UnqualifiedType::Tag(
+                                        Some("hoge".to_string()),
+                                        Tag::Enum(Some(vec![Enumerator("x".to_string(), None)]))
                                     ),
-                                    vec![]
-                                ))
-                            )],
-                            is_variadic: false
-                        })]
-                    )]
-                )
-            )]
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![]
+                            ))
+                        )],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"enum foo { a, b = 10, c };"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("foo".to_string()),
-                            Tag::Enum(Some(vec![
-                                Enumerator("a".to_string(), None),
-                                Enumerator("b".to_string(), Some(10)),
-                                Enumerator("c".to_string(), None),
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Enum(Some(vec![
+                            Enumerator("a".to_string(), None),
+                            Enumerator("b".to_string(), Some(10)),
+                            Enumerator("c".to_string(), None),
+                        ]))
                     ),
-                    vec![]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(r#"struct foo { int a : 1, b; };"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("foo".to_string()),
-                            Tag::Struct(Some(vec![TagFieldDecl(
-                                QualifiedType(
-                                    UnqualifiedType::Basic(BasicType::Int),
-                                    TypeQualifiers::empty()
-                                ),
-                                vec![
-                                    ("a".to_string(), vec![], Some(1)),
-                                    ("b".to_string(), vec![], None),
-                                ]
-                            )]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("foo".to_string()),
+                        Tag::Struct(Some(vec![TagFieldDecl(
+                            QualifiedType(
+                                UnqualifiedType::Basic(BasicType::Int),
+                                TypeQualifiers::empty()
+                            ),
+                            vec![
+                                ("a".to_string(), vec![], Some(1)),
+                                ("b".to_string(), vec![], None),
+                            ]
+                        )]))
                     ),
-                    vec![]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![],
+                None
+            ))]
         );
         // self-referencing struct
         assert_eq!(
             parse_external_declarations(r#"struct s { struct s *next };"#),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            Some("s".to_string()),
-                            Tag::Struct(Some(vec![TagFieldDecl(
-                                QualifiedType(
-                                    UnqualifiedType::Tag(Some("s".to_string()), Tag::Struct(None)),
-                                    TypeQualifiers::empty()
-                                ),
-                                vec![(
-                                    "next".to_string(),
-                                    vec![Deriv::Ptr(TypeQualifiers::empty())],
-                                    None
-                                )]
-                            )]))
-                        ),
-                        TypeQualifiers::empty()
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        Some("s".to_string()),
+                        Tag::Struct(Some(vec![TagFieldDecl(
+                            QualifiedType(
+                                UnqualifiedType::Tag(Some("s".to_string()), Tag::Struct(None)),
+                                TypeQualifiers::empty()
+                            ),
+                            vec![(
+                                "next".to_string(),
+                                vec![Deriv::Ptr(TypeQualifiers::empty())],
+                                None
+                            )]
+                        )]))
                     ),
-                    vec![]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![],
+                None
+            ))]
         );
         assert_eq!(
             parse_external_declarations(
                 r#"union { int x : 2; struct { int a, *b }; char * const z } foo;"#
             ),
-            vec![ExtDecl::Decl(
+            vec![ExtDecl::Decl(Decl(
                 None,
-                Decl(
-                    QualifiedType(
-                        UnqualifiedType::Tag(
-                            None,
-                            Tag::Union(Some(vec![
-                                TagFieldDecl(
-                                    QualifiedType(
-                                        UnqualifiedType::Basic(BasicType::Int),
-                                        TypeQualifiers::empty()
-                                    ),
-                                    vec![("x".to_string(), vec![], Some(2)),]
+                QualifiedType(
+                    UnqualifiedType::Tag(
+                        None,
+                        Tag::Union(Some(vec![
+                            TagFieldDecl(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Int),
+                                    TypeQualifiers::empty()
                                 ),
-                                TagFieldDecl(
-                                    QualifiedType(
-                                        UnqualifiedType::Tag(
-                                            None,
-                                            Tag::Struct(Some(vec![TagFieldDecl(
-                                                QualifiedType(
-                                                    UnqualifiedType::Basic(BasicType::Int),
-                                                    TypeQualifiers::empty()
-                                                ),
-                                                vec![
-                                                    ("a".to_string(), vec![], None),
-                                                    (
-                                                        "b".to_string(),
-                                                        vec![Deriv::Ptr(TypeQualifiers::empty())],
-                                                        None
-                                                    )
-                                                ]
-                                            )]))
-                                        ),
-                                        TypeQualifiers::empty()
+                                vec![("x".to_string(), vec![], Some(2)),]
+                            ),
+                            TagFieldDecl(
+                                QualifiedType(
+                                    UnqualifiedType::Tag(
+                                        None,
+                                        Tag::Struct(Some(vec![TagFieldDecl(
+                                            QualifiedType(
+                                                UnqualifiedType::Basic(BasicType::Int),
+                                                TypeQualifiers::empty()
+                                            ),
+                                            vec![
+                                                ("a".to_string(), vec![], None),
+                                                (
+                                                    "b".to_string(),
+                                                    vec![Deriv::Ptr(TypeQualifiers::empty())],
+                                                    None
+                                                )
+                                            ]
+                                        )]))
                                     ),
-                                    vec![]
+                                    TypeQualifiers::empty()
                                 ),
-                                TagFieldDecl(
-                                    QualifiedType(
-                                        UnqualifiedType::Basic(BasicType::Char),
-                                        TypeQualifiers::empty()
-                                    ),
-                                    vec![(
-                                        "z".to_string(),
-                                        vec![Deriv::Ptr(TypeQualifiers::CONST)],
-                                        None
-                                    )]
-                                )
-                            ]))
-                        ),
-                        TypeQualifiers::empty()
+                                vec![]
+                            ),
+                            TagFieldDecl(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Char),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![(
+                                    "z".to_string(),
+                                    vec![Deriv::Ptr(TypeQualifiers::CONST)],
+                                    None
+                                )]
+                            )
+                        ]))
                     ),
-                    vec![("foo".to_string(), vec![])]
-                )
-            )]
+                    TypeQualifiers::empty()
+                ),
+                vec![("foo".to_string(), vec![])],
+                None
+            ))]
         );
     }
 }
