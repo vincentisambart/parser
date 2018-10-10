@@ -219,9 +219,15 @@ struct TypeManager {
 }
 
 impl TypeManager {
+    fn builtin_types() -> HashSet<String> {
+        let mut builtins = HashSet::new();
+        builtins.insert("__builtin_va_list".to_string());
+        builtins
+    }
+
     fn new() -> TypeManager {
         TypeManager {
-            types_stack: vec![HashSet::new()],
+            types_stack: vec![Self::builtin_types()],
         }
     }
 
