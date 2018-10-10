@@ -114,22 +114,32 @@ bitflags! {
 type ConstExpr = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Enumerator(String, Option<ConstExpr>);
+struct EnumItem(String, Option<ConstExpr>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TagFieldDecl(QualifiedType, Vec<(String, Vec<Deriv>, Option<ConstExpr>)>);
+struct TagItemDecl(QualifiedType, Vec<(String, Vec<Deriv>, Option<ConstExpr>)>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tag {
-    Enum(Option<Vec<Enumerator>>),
-    Struct(Option<Vec<TagFieldDecl>>),
-    Union(Option<Vec<TagFieldDecl>>),
+    Enum(Option<String>, Option<Vec<EnumItem>>),
+    Struct(Option<String>, Option<Vec<TagItemDecl>>),
+    Union(Option<String>, Option<Vec<TagItemDecl>>),
 }
+
+// impl Tag {
+//     fn name(&self) -> &Option<String> {
+//         match self {
+//             Tag::Enum(name, _) => name,
+//             Tag::Struct(name, _) => name,
+//             Tag::Union(name, _) => name,
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UnqualifiedType {
     Basic(BasicType),
-    Tag(Option<String>, Tag),
+    Tag(Tag),
     Custom(String),
 }
 
@@ -303,7 +313,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn read_enum(&mut self, pos: &Position) -> Result<UnqualifiedType, ParseError> {
+    fn read_enum(&mut self, pos: &Position) -> Result<Tag, ParseError> {
         let enum_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
         let unqual_type = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
             let mut enum_values = Vec::new();
@@ -313,9 +323,9 @@ impl<'a> Parser<'a> {
                 } else if let Some((value_name, _)) = self.iter.next_if_any_ident()? {
                     if self.iter.advance_if_punc(Punctuator::Equal)? {
                         let value = self.read_constant_value()?;
-                        enum_values.push(Enumerator(value_name, Some(value)));
+                        enum_values.push(EnumItem(value_name, Some(value)));
                     } else {
-                        enum_values.push(Enumerator(value_name, None));
+                        enum_values.push(EnumItem(value_name, None));
                     }
                     if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
                         break;
@@ -330,7 +340,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
             }
-            UnqualifiedType::Tag(enum_name, Tag::Enum(Some(enum_values)))
+            Tag::Enum(enum_name, Some(enum_values))
         } else {
             if enum_name.is_none() {
                 return Err(ParseError::new_with_position(
@@ -339,21 +349,17 @@ impl<'a> Parser<'a> {
                     pos.clone(),
                 ));
             }
-            UnqualifiedType::Tag(enum_name, Tag::Enum(None))
+            Tag::Enum(enum_name, None)
         };
         Ok(unqual_type)
     }
 
-    fn read_union_or_struct<F>(
-        &mut self,
-        pos: &Position,
-        builder: F,
-    ) -> Result<UnqualifiedType, ParseError>
+    fn read_union_or_struct<F>(&mut self, pos: &Position, builder: F) -> Result<Tag, ParseError>
     where
-        F: Fn(Option<Vec<TagFieldDecl>>) -> Tag,
+        F: Fn(Option<String>, Option<Vec<TagItemDecl>>) -> Tag,
     {
         let struct_name = self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
-        let unqual_type = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+        let tag = if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
             let mut struct_field_decls = Vec::new();
             loop {
                 if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
@@ -428,12 +434,12 @@ impl<'a> Parser<'a> {
                         self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
                     }
                 }
-                struct_field_decls.push(TagFieldDecl(root_type, fields));
+                struct_field_decls.push(TagItemDecl(root_type, fields));
                 if did_finish_struct {
                     break;
                 }
             }
-            UnqualifiedType::Tag(struct_name, builder(Some(struct_field_decls)))
+            builder(struct_name, Some(struct_field_decls))
         } else {
             if struct_name.is_none() {
                 return Err(ParseError::new_with_position(
@@ -443,9 +449,9 @@ impl<'a> Parser<'a> {
                     pos.clone(),
                 ));
             }
-            UnqualifiedType::Tag(struct_name, builder(None))
+            builder(struct_name, None)
         };
-        Ok(unqual_type)
+        Ok(tag)
     }
 
     fn expect_token(&mut self, expected_token: &Token) -> Result<(), ParseError> {
@@ -1010,7 +1016,7 @@ impl<'a> Parser<'a> {
                     decl_pos,
                 ));
             }
-            tag
+            UnqualifiedType::Tag(tag)
         } else if type_kw_counts.is_empty() {
             UnqualifiedType::Basic(BasicType::Int)
         } else {
@@ -1670,7 +1676,7 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
+                    UnqualifiedType::Tag(Tag::Enum(Some("foo".to_string()), None)),
                     TypeQualifiers::empty()
                 ),
                 vec![],
@@ -1682,7 +1688,7 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(Some("foo".to_string()), Tag::Enum(None)),
+                    UnqualifiedType::Tag(Tag::Enum(Some("foo".to_string()), None)),
                     TypeQualifiers::empty()
                 ),
                 vec![("bar".to_string(), vec![])],
@@ -1694,14 +1700,14 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Enum(
                         Some("foo".to_string()),
-                        Tag::Enum(Some(vec![
-                            Enumerator("a".to_string(), None),
-                            Enumerator("b".to_string(), Some(10)),
-                            Enumerator("c".to_string(), None),
-                        ]))
-                    ),
+                        Some(vec![
+                            EnumItem("a".to_string(), None),
+                            EnumItem("b".to_string(), Some(10)),
+                            EnumItem("c".to_string(), None),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![("bar".to_string(), vec![])],
@@ -1713,14 +1719,14 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Enum(
                         Some("foo".to_string()),
-                        Tag::Enum(Some(vec![
-                            Enumerator("a".to_string(), None),
-                            Enumerator("b".to_string(), Some(10)),
-                            Enumerator("c".to_string(), None),
-                        ]))
-                    ),
+                        Some(vec![
+                            EnumItem("a".to_string(), None),
+                            EnumItem("b".to_string(), Some(10)),
+                            EnumItem("c".to_string(), None),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![(
@@ -1738,14 +1744,14 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Enum(
                         None,
-                        Tag::Enum(Some(vec![
-                            Enumerator("a".to_string(), None),
-                            Enumerator("b".to_string(), Some(10)),
-                            Enumerator("c".to_string(), None),
-                        ]))
-                    ),
+                        Some(vec![
+                            EnumItem("a".to_string(), None),
+                            EnumItem("b".to_string(), Some(10)),
+                            EnumItem("c".to_string(), None),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![(
@@ -1764,14 +1770,14 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Enum(
                         Some("foo".to_string()),
-                        Tag::Enum(Some(vec![
-                            Enumerator("a".to_string(), None),
-                            Enumerator("b".to_string(), Some(10)),
-                            Enumerator("c".to_string(), None),
-                        ]))
-                    ),
+                        Some(vec![
+                            EnumItem("a".to_string(), None),
+                            EnumItem("b".to_string(), Some(10)),
+                            EnumItem("c".to_string(), None),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![(
@@ -1781,10 +1787,10 @@ mod tests {
                             None,
                             Some(DerivedType(
                                 QualifiedType(
-                                    UnqualifiedType::Tag(
+                                    UnqualifiedType::Tag(Tag::Enum(
                                         Some("hoge".to_string()),
-                                        Tag::Enum(Some(vec![Enumerator("x".to_string(), None)]))
-                                    ),
+                                        Some(vec![EnumItem("x".to_string(), None)])
+                                    )),
                                     TypeQualifiers::empty()
                                 ),
                                 vec![]
@@ -1801,14 +1807,14 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Enum(
                         Some("foo".to_string()),
-                        Tag::Enum(Some(vec![
-                            Enumerator("a".to_string(), None),
-                            Enumerator("b".to_string(), Some(10)),
-                            Enumerator("c".to_string(), None),
-                        ]))
-                    ),
+                        Some(vec![
+                            EnumItem("a".to_string(), None),
+                            EnumItem("b".to_string(), Some(10)),
+                            EnumItem("c".to_string(), None),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![],
@@ -1820,9 +1826,9 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Struct(
                         Some("foo".to_string()),
-                        Tag::Struct(Some(vec![TagFieldDecl(
+                        Some(vec![TagItemDecl(
                             QualifiedType(
                                 UnqualifiedType::Basic(BasicType::Int),
                                 TypeQualifiers::empty()
@@ -1831,8 +1837,8 @@ mod tests {
                                 ("a".to_string(), vec![], Some(1)),
                                 ("b".to_string(), vec![], None),
                             ]
-                        )]))
-                    ),
+                        )])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![],
@@ -1845,11 +1851,11 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Struct(
                         Some("s".to_string()),
-                        Tag::Struct(Some(vec![TagFieldDecl(
+                        Some(vec![TagItemDecl(
                             QualifiedType(
-                                UnqualifiedType::Tag(Some("s".to_string()), Tag::Struct(None)),
+                                UnqualifiedType::Tag(Tag::Struct(Some("s".to_string()), None)),
                                 TypeQualifiers::empty()
                             ),
                             vec![(
@@ -1857,8 +1863,8 @@ mod tests {
                                 vec![Deriv::Ptr(TypeQualifiers::empty())],
                                 None
                             )]
-                        )]))
-                    ),
+                        )])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![],
@@ -1872,21 +1878,21 @@ mod tests {
             vec![ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
-                    UnqualifiedType::Tag(
+                    UnqualifiedType::Tag(Tag::Union(
                         None,
-                        Tag::Union(Some(vec![
-                            TagFieldDecl(
+                        Some(vec![
+                            TagItemDecl(
                                 QualifiedType(
                                     UnqualifiedType::Basic(BasicType::Int),
                                     TypeQualifiers::empty()
                                 ),
                                 vec![("x".to_string(), vec![], Some(2)),]
                             ),
-                            TagFieldDecl(
+                            TagItemDecl(
                                 QualifiedType(
-                                    UnqualifiedType::Tag(
+                                    UnqualifiedType::Tag(Tag::Struct(
                                         None,
-                                        Tag::Struct(Some(vec![TagFieldDecl(
+                                        Some(vec![TagItemDecl(
                                             QualifiedType(
                                                 UnqualifiedType::Basic(BasicType::Int),
                                                 TypeQualifiers::empty()
@@ -1899,13 +1905,13 @@ mod tests {
                                                     None
                                                 )
                                             ]
-                                        )]))
-                                    ),
+                                        )])
+                                    )),
                                     TypeQualifiers::empty()
                                 ),
                                 vec![]
                             ),
-                            TagFieldDecl(
+                            TagItemDecl(
                                 QualifiedType(
                                     UnqualifiedType::Basic(BasicType::Char),
                                     TypeQualifiers::empty()
@@ -1916,8 +1922,8 @@ mod tests {
                                     None
                                 )]
                             )
-                        ]))
-                    ),
+                        ])
+                    )),
                     TypeQualifiers::empty()
                 ),
                 vec![("foo".to_string(), vec![])],
