@@ -839,7 +839,7 @@ impl<'a> Parser<'a> {
                     BasicType::UnsignedLongLong
                 }
             } else {
-                assert!(type_kw_counts.len() == 1);
+                assert!(type_kw_counts.len() == 1 || type_kw_counts.len() == 2);
                 if long_count == 1 {
                     BasicType::Long
                 } else {
@@ -1667,6 +1667,16 @@ mod tests {
                 vec![("foo".to_string(), vec![])]
             ))]
         );
+        assert_eq!(
+            parse_external_declarations(r#"typedef long int __darwin_ptrdiff_t;"#),
+            vec![ExtDecl::TypeDef(TypeDecl(
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Long),
+                    TypeQualifiers::empty()
+                ),
+                vec![("__darwin_ptrdiff_t".to_string(), vec![])]
+            ))]
+        );
     }
 
     #[test]
@@ -1935,7 +1945,8 @@ mod tests {
 
 fn main() -> Result<(), ParseError> {
     let mut parser = Parser::from_code(r#"x;"#);
-    let decls = parser.next()?;
-    println!("Declaration: {:?}", decls);
+    while let Some(decl) = parser.next()? {
+        println!("Declaration: {:?}", decl);
+    }
     Ok(())
 }
