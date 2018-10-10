@@ -4,6 +4,7 @@
 // - Add position to declarations
 // - Function definition
 // - Variable initialization
+// - Error on _Thread_local of types or var decls
 
 mod error;
 mod failable;
@@ -177,13 +178,21 @@ enum Deriv {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TypeDecl(QualifiedType, Vec<(String, Vec<Deriv>)>);
 
-// TODO: Rename, as it can be also a function declaration
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Decl(
     Option<Linkage>,
     QualifiedType,
     Vec<(String, Vec<Deriv>)>,
     Option<ConstExpr>,
+);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FuncDef(
+    String,
+    Option<Linkage>,
+    FuncSpecifiers,
+    QualifiedType,
+    FuncParams,
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +205,7 @@ enum Linkage {
 enum ExtDecl {
     Decl(Decl),
     TypeDef(TypeDecl),
-    // FuncDef(FuncDef),
+    FuncDef(FuncDef),
 }
 
 #[derive(Debug, Clone)]
@@ -1121,21 +1130,117 @@ impl<'a> FailableIterator for Parser<'a> {
                 match self.iter.next()? {
                     Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _)) => break,
                     Some(PositionedToken(Token::Punctuator(Punctuator::Comma), _)) => (),
-                    Some(PositionedToken(token, position)) => {
+                    Some(PositionedToken(Token::Punctuator(Punctuator::LeftCurlyBracket), pos)) => {
+                        // Function definition
+                        if is_typedef {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a typedef should not be used on a function definition".to_string(),
+                                pos,
+                            ));
+                        }
+                        if declarators.len() != 1 {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a function definition should not be mixed with declarations"
+                                    .to_string(),
+                                pos,
+                            ));
+                        }
+                        let (ident, derivs) = declarators.into_iter().next().unwrap();
+                        if let Some(Deriv::Func(_)) = derivs.last() {
+                            // OK
+                        } else {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "only expecting a left curly brace in a declaration for a function definition"
+                                    .to_string(),
+                                pos,
+                            ));
+                        }
+
+                        let mut opened_curlies = 1;
+                        loop {
+                            match self.iter.next()? {
+                                Some(PositionedToken(
+                                    Token::Punctuator(Punctuator::LeftCurlyBracket),
+                                    _,
+                                )) => opened_curlies += 1,
+                                Some(PositionedToken(
+                                    Token::Punctuator(Punctuator::RightCurlyBracket),
+                                    _,
+                                )) => {
+                                    opened_curlies -= 1;
+                                    if opened_curlies == 0 {
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    return Err(ParseError::new(
+                                        ParseErrorKind::UnexpectedEOF,
+                                        format!(
+                                        "end of file even though {} curly braces were not closed",
+                                        opened_curlies
+                                      ),
+                                    ))
+                                }
+                                _ => (),
+                            }
+                        }
+
+                        let (qual_type, linkage, func_specifiers, is_thread_local) = match decl_spec
+                        {
+                            Some(DeclSpec::Decl {
+                                qual_type,
+                                linkage,
+                                func_specifiers,
+                                is_thread_local,
+                                ..
+                            }) => (qual_type, linkage, func_specifiers, is_thread_local),
+                            None => (
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Int),
+                                    TypeQualifiers::empty(),
+                                ),
+                                None,
+                                FuncSpecifiers::empty(),
+                                false,
+                            ),
+                            _ => unreachable!(),
+                        };
+
+                        if is_thread_local {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "only variable declaration can be thread local".to_string(),
+                                pos,
+                            ));
+                        }
+
+                        let def = FuncDef(
+                            ident,
+                            linkage,
+                            func_specifiers,
+                            qual_type,
+                            FuncParams::Undef,
+                        );
+                        return Ok(Some(ExtDecl::FuncDef(def)));
+                    }
+                    Some(PositionedToken(token, pos)) => {
                         let message = format!(
-                            "got {:?} in declaration where expecting a comma or semicolor",
+                            "got {:?} in declaration where expecting a comma or semicolon",
                             token
                         );
                         return Err(ParseError::new_with_position(
                             ParseErrorKind::UnexpectedToken(token),
                             message,
-                            position,
+                            pos,
                         ));
                     }
                     None => {
                         return Err(ParseError::new(
                             ParseErrorKind::UnexpectedEOF,
-                            "end of file where expecting a comma or semicolor".to_string(),
+                            "end of file where expecting a comma or semicolon".to_string(),
                         ))
                     }
                 }
@@ -1383,6 +1488,60 @@ mod tests {
                 None
             ))]
         );
+        // function returning a function pointer
+        assert_eq!(
+            parse_external_declarations(r#"short (*foo())();"#),
+            vec![ExtDecl::Decl(Decl(
+                None,
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Short),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![
+                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Ptr(TypeQualifiers::empty()),
+                        Deriv::Func(FuncParams::Undef)
+                    ]
+                )],
+                None
+            ))]
+        );
+    }
+
+    #[test]
+    fn test_function_definition() {
+        assert_eq!(
+            parse_external_declarations(r#"foo() {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                FuncParams::Undef
+            ))]
+        );
+        assert_eq!(
+            parse_external_declarations(r#"void foo() {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                FuncParams::Undef
+            ))]
+        );
+        // void foo(a) {}
+        // void foo(a, b) int a {}
+        // void foo(int a, char b) {}
+        // short (*foo())() {}
     }
 
     #[test]
