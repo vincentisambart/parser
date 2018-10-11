@@ -1147,17 +1147,21 @@ impl<'a> FailableIterator for Parser<'a> {
                                 pos,
                             ));
                         }
-                        let (ident, derivs) = declarators.into_iter().next().unwrap();
-                        if let Some(Deriv::Func(_)) = derivs.last() {
-                            // OK
+                        let (ident, mut derivs) = declarators.into_iter().next().unwrap();
+                        let params = if let Some(Deriv::Func(_)) = derivs.first() {
+                            if let Deriv::Func(params) = derivs.remove(0) {
+                                params
+                            } else {
+                                unreachable!()
+                            }
                         } else {
                             return Err(ParseError::new_with_position(
-                                ParseErrorKind::InvalidConstruct,
+                                 ParseErrorKind::InvalidConstruct,
                                 "only expecting a left curly brace in a declaration for a function definition"
-                                    .to_string(),
-                                pos,
+                                      .to_string(),
+                                 pos,
                             ));
-                        }
+                        };
 
                         let mut opened_curlies = 1;
                         loop {
@@ -1217,13 +1221,9 @@ impl<'a> FailableIterator for Parser<'a> {
                             ));
                         }
 
-                        let def = FuncDef(
-                            ident,
-                            linkage,
-                            func_specifiers,
-                            qual_type,
-                            FuncParams::Undef,
-                        );
+                        // let ret_val_deriv,
+
+                        let def = FuncDef(ident, linkage, func_specifiers, qual_type, params);
                         return Ok(Some(ExtDecl::FuncDef(def)));
                     }
                     Some(PositionedToken(token, pos)) => {
@@ -1538,9 +1538,45 @@ mod tests {
                 FuncParams::Undef
             ))]
         );
+        assert_eq!(
+            parse_external_declarations(r#"void foo(int a, char b) {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                FuncParams::Defined {
+                    params: vec![
+                        FuncParam(
+                            Some("a".to_string()),
+                            Some(DerivedType(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Int),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![]
+                            ))
+                        ),
+                        FuncParam(
+                            Some("b".to_string()),
+                            Some(DerivedType(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Char),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![]
+                            ))
+                        )
+                    ],
+                    is_variadic: false
+                }
+            ))]
+        );
         // void foo(a) {}
         // void foo(a, b) int a {}
-        // void foo(int a, char b) {}
         // short (*foo())() {}
     }
 
