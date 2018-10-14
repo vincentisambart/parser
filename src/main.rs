@@ -3,7 +3,7 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Variable initialization
-// - Error on _Thread_local of types or var decls
+// - Error on _Thread_local of typedefs or var decls
 
 mod error;
 mod failable;
@@ -309,7 +309,7 @@ impl TypeManager {
 
     fn new() -> TypeManager {
         TypeManager {
-            types_stack: vec![Self::builtin_types()],
+            types_stack: vec![Self::builtin_types(), HashSet::new()],
         }
     }
 
