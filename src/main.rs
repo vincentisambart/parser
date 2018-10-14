@@ -5,6 +5,7 @@
 // - Function definition
 // - Variable initialization
 // - Error on _Thread_local of types or var decls
+// - Parse functions definitions returning a derived type: short (*foo())() {}
 
 mod error;
 mod failable;
@@ -203,18 +204,49 @@ struct DerivedType(QualifiedType, Vec<Deriv>);
 struct FuncParam(Option<String>, Option<DerivedType>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FuncParams {
-    Undef,
-    Defined {
+struct KnRFuncParamDecl(QualifiedType, Vec<(String, Vec<Deriv>)>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FuncDeclParams {
+    Unspecified,
+    Ansi {
         params: Vec<FuncParam>,
         is_variadic: bool,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum FuncDefParams {
+    Unspecified,
+    KnR {
+        param_names: Vec<String>,
+        decls: Vec<KnRFuncParamDecl>,
+    },
+    Ansi {
+        params: Vec<FuncParam>,
+        is_variadic: bool,
+    },
+}
+
+impl From<FuncDeclParams> for FuncDefParams {
+    fn from(params: FuncDeclParams) -> Self {
+        match params {
+            FuncDeclParams::Unspecified => FuncDefParams::Unspecified,
+            FuncDeclParams::Ansi {
+                params,
+                is_variadic,
+            } => FuncDefParams::Ansi {
+                params,
+                is_variadic,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Deriv {
     Ptr(TypeQualifiers),
-    Func(FuncParams),
+    Func(FuncDeclParams),
     Array(ArraySize),
 }
 
@@ -235,7 +267,7 @@ struct FuncDef(
     Option<Linkage>,
     FuncSpecifiers,
     QualifiedType,
-    FuncParams,
+    FuncDefParams,
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,7 +329,7 @@ impl TypeManager {
 
 struct DeclaratorParenLevel {
     ptr_qualifs: Vec<TypeQualifiers>,
-    func_params: Option<FuncParams>,
+    func_params: Option<FuncDeclParams>,
     array_sizes: Vec<ArraySize>,
 }
 
@@ -324,29 +356,30 @@ impl DeclaratorParenLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FuncDefKind {
+enum FuncDefParamsKind {
+    Unspecified,
     KnR,
     Ansi,
 }
 
-impl FuncDefKind {
-    fn from(derivs: &Vec<Deriv>) -> Option<FuncDefKind> {
+impl FuncDefParamsKind {
+    fn from(derivs: &Vec<Deriv>) -> Option<FuncDefParamsKind> {
         if let Some(Deriv::Func(params)) = derivs.first() {
-            if let FuncParams::Defined {
-                params,
-                is_variadic,
-            } = params
-            {
-                if params.len() > 0 && !is_variadic && params.iter().all(|param| {
-                    let FuncParam(name, _) = param;
-                    name.is_some()
-                }) {
-                    Some(FuncDefKind::KnR)
-                } else {
-                    Some(FuncDefKind::Ansi)
+            match params {
+                FuncDeclParams::Ansi {
+                    params,
+                    is_variadic,
+                } => {
+                    if params.len() > 0 && !is_variadic && params.iter().all(|param| {
+                        let FuncParam(name, _) = param;
+                        name.is_some()
+                    }) {
+                        Some(FuncDefParamsKind::KnR)
+                    } else {
+                        Some(FuncDefParamsKind::Ansi)
+                    }
                 }
-            } else {
-                Some(FuncDefKind::KnR)
+                FuncDeclParams::Unspecified => Some(FuncDefParamsKind::Unspecified),
             }
         } else {
             None
@@ -575,10 +608,10 @@ impl<'a> Parser<'a> {
     }
 
     // Should be called just after having read an opening parenthesis.
-    fn read_func_params(&mut self) -> Result<FuncParams, ParseError> {
+    fn read_func_params(&mut self) -> Result<FuncDeclParams, ParseError> {
         if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
             // foo() means parameters are undefined
-            return Ok(FuncParams::Undef);
+            return Ok(FuncDeclParams::Unspecified);
         }
         let mut params = Vec::new();
         let mut is_first_param = true;
@@ -668,7 +701,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(FuncParams::Defined {
+        Ok(FuncDeclParams::Ansi {
             params,
             is_variadic,
         })
@@ -964,21 +997,8 @@ impl<'a> Parser<'a> {
         Ok(Some(decl_spec))
     }
 
-    fn read_func_def(
-        &mut self,
-        func_def_kind: FuncDefKind,
-        ident: String,
-        decl_spec: Option<DeclSpec>,
-        mut derivs: Vec<Deriv>,
-    ) -> Result<ExtDecl, ParseError> {
-        let pos = self.expect_token(&Token::Punctuator(Punctuator::LeftCurlyBracket))?;
-
-        let params = if let Deriv::Func(params) = derivs.remove(0) {
-            params
-        } else {
-            unreachable!()
-        };
-
+    // Should be called just after the opening curly brace of the function body has been read.
+    fn skip_func_body(&mut self) -> Result<(), ParseError> {
         let mut opened_curlies = 1;
         loop {
             match self.iter.next()? {
@@ -1003,6 +1023,25 @@ impl<'a> Parser<'a> {
                 _ => (),
             }
         }
+        Ok(())
+    }
+
+    fn read_func_def(
+        &mut self,
+        func_def_kind: FuncDefParamsKind,
+        ident: String,
+        decl_spec: Option<DeclSpec>,
+        mut derivs: Vec<Deriv>,
+    ) -> Result<ExtDecl, ParseError> {
+        let pos = self.expect_token(&Token::Punctuator(Punctuator::LeftCurlyBracket))?;
+
+        let params = if let Deriv::Func(params) = derivs.remove(0) {
+            params
+        } else {
+            unreachable!()
+        };
+
+        self.skip_func_body()?;
 
         let (qual_type, linkage, func_specifiers, is_thread_local) = match decl_spec {
             Some(DeclSpec::Decl {
@@ -1032,7 +1071,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let def = FuncDef(ident, linkage, func_specifiers, qual_type, params);
+        let def = FuncDef(ident, linkage, func_specifiers, qual_type, params.into());
         return Ok(ExtDecl::FuncDef(def));
     }
 }
@@ -1086,7 +1125,7 @@ impl<'a> FailableIterator for Parser<'a> {
                 }
 
                 let func_def_kind = if !is_typedef && declarators.is_empty() {
-                    if let Some(func_def_kind) = FuncDefKind::from(&derivs) {
+                    if let Some(func_def_kind) = FuncDefParamsKind::from(&derivs) {
                         match self.iter.peek()? {
                             // If the next token is a ";" or ",", we're in a function declaration, not definition
                             Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _))
@@ -1317,7 +1356,10 @@ mod tests {
                     UnqualifiedType::Basic(BasicType::Int),
                     TypeQualifiers::empty()
                 ),
-                vec![("foo".to_string(), vec![Deriv::Func(FuncParams::Undef)])],
+                vec![(
+                    "foo".to_string(),
+                    vec![Deriv::Func(FuncDeclParams::Unspecified)]
+                )],
                 None
             ))]
         );
@@ -1331,7 +1373,7 @@ mod tests {
                 ),
                 vec![(
                     "foo".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![],
                         is_variadic: false
                     })]
@@ -1349,7 +1391,7 @@ mod tests {
                 ),
                 vec![(
                     "foo".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![
                             FuncParam(
                                 Some("a".to_string()),
@@ -1390,9 +1432,9 @@ mod tests {
                 vec![(
                     "foo".to_string(),
                     vec![
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef)
+                        Deriv::Func(FuncDeclParams::Unspecified)
                     ]
                 )],
                 None
@@ -1412,7 +1454,7 @@ mod tests {
                     UnqualifiedType::Basic(BasicType::Int),
                     TypeQualifiers::empty()
                 ),
-                FuncParams::Undef
+                FuncDefParams::Unspecified
             ))]
         );
         assert_eq!(
@@ -1425,7 +1467,7 @@ mod tests {
                     UnqualifiedType::Basic(BasicType::Void),
                     TypeQualifiers::empty()
                 ),
-                FuncParams::Undef
+                FuncDefParams::Unspecified
             ))]
         );
         assert_eq!(
@@ -1438,7 +1480,7 @@ mod tests {
                     UnqualifiedType::Basic(BasicType::Void),
                     TypeQualifiers::empty()
                 ),
-                FuncParams::Defined {
+                FuncDefParams::Ansi {
                     params: vec![
                         FuncParam(
                             Some("a".to_string()),
@@ -1465,9 +1507,78 @@ mod tests {
                 }
             ))]
         );
-        // void foo(a) {}
-        // void foo(a, b) int a {}
-        // short (*foo())() {}
+        assert_eq!(
+            parse_external_declarations(r#"void foo(a) {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                FuncDefParams::KnR {
+                    param_names: vec!["a".to_string()],
+                    decls: vec![],
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_external_declarations(r#"void foo(a, b) int a {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                FuncDefParams::KnR {
+                    param_names: vec!["a".to_string(), "b".to_string()],
+                    decls: vec![KnRFuncParamDecl(
+                        QualifiedType(
+                            UnqualifiedType::Basic(BasicType::Int),
+                            TypeQualifiers::empty()
+                        ),
+                        vec![("a".to_string(), vec![])]
+                    )],
+                }
+            ))]
+        );
+        assert_eq!(
+            parse_external_declarations(r#"void foo(a, b, c) short c; char *const a, b; {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                FuncDefParams::KnR {
+                    param_names: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                    decls: vec![
+                        KnRFuncParamDecl(
+                            QualifiedType(
+                                UnqualifiedType::Basic(BasicType::Short),
+                                TypeQualifiers::empty()
+                            ),
+                            vec![("c".to_string(), vec![])]
+                        ),
+                        KnRFuncParamDecl(
+                            QualifiedType(
+                                UnqualifiedType::Basic(BasicType::Char),
+                                TypeQualifiers::empty()
+                            ),
+                            vec![
+                                ("a".to_string(), vec![Deriv::Ptr(TypeQualifiers::CONST)]),
+                                ("b".to_string(), vec![])
+                            ]
+                        )
+                    ],
+                }
+            ))]
+        );
     }
 
     #[test]
@@ -1483,7 +1594,7 @@ mod tests {
                 vec![(
                     "foo".to_string(),
                     vec![
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty())
                     ]
                 )],
@@ -1501,7 +1612,7 @@ mod tests {
                 vec![(
                     "foo".to_string(),
                     vec![
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty())
                     ]
                 )],
@@ -1519,9 +1630,9 @@ mod tests {
                 vec![(
                     "bar".to_string(),
                     vec![
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty())
                     ]
                 )],
@@ -1539,9 +1650,9 @@ mod tests {
                 vec![(
                     "foo".to_string(),
                     vec![
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef)
+                        Deriv::Func(FuncDeclParams::Unspecified)
                     ]
                 )],
                 None
@@ -1559,7 +1670,7 @@ mod tests {
                     "hogehoge".to_string(),
                     vec![
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty()),
                         Deriv::Ptr(TypeQualifiers::empty())
                     ]
@@ -1613,7 +1724,7 @@ mod tests {
                 ),
                 vec![(
                     "bar".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![FuncParam(
                             Some("foo".to_string()),
                             Some(DerivedType(
@@ -1642,7 +1753,7 @@ mod tests {
                     "abcdef".to_string(),
                     vec![
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef),
+                        Deriv::Func(FuncDeclParams::Unspecified),
                         Deriv::Ptr(TypeQualifiers::empty()),
                         Deriv::Array(ArraySize::Fixed(3))
                     ]
@@ -1665,7 +1776,7 @@ mod tests {
                     "truc".to_string(),
                     vec![
                         Deriv::Ptr(TypeQualifiers::empty()),
-                        Deriv::Func(FuncParams::Undef)
+                        Deriv::Func(FuncDeclParams::Unspecified)
                     ]
                 )]
             ))]
@@ -1730,7 +1841,7 @@ mod tests {
                     ("foo".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())]),
                     (
                         "bar".to_string(),
-                        vec![Deriv::Func(FuncParams::Defined {
+                        vec![Deriv::Func(FuncDeclParams::Ansi {
                             params: vec![FuncParam(
                                 Some("x".to_string()),
                                 Some(DerivedType(
@@ -1832,7 +1943,7 @@ mod tests {
                 ),
                 vec![(
                     "bar".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![],
                         is_variadic: false
                     })]
@@ -1857,7 +1968,7 @@ mod tests {
                 ),
                 vec![(
                     "bar".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![],
                         is_variadic: false
                     })]
@@ -1883,7 +1994,7 @@ mod tests {
                 ),
                 vec![(
                     "bar".to_string(),
-                    vec![Deriv::Func(FuncParams::Defined {
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
                         params: vec![FuncParam(
                             None,
                             Some(DerivedType(
