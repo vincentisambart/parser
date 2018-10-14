@@ -2,10 +2,8 @@
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
-// - Function definition
 // - Variable initialization
 // - Error on _Thread_local of types or var decls
-// - Parse functions definitions returning a derived type: short (*foo())() {}
 
 mod error;
 mod failable;
@@ -266,7 +264,7 @@ struct FuncDef(
     String,
     Option<Linkage>,
     FuncSpecifiers,
-    QualifiedType,
+    DerivedType,
     FuncDefParams,
 );
 
@@ -363,26 +361,30 @@ enum FuncDefParamsKind {
 }
 
 impl FuncDefParamsKind {
-    fn from(derivs: &Vec<Deriv>) -> Option<FuncDefParamsKind> {
-        if let Some(Deriv::Func(params)) = derivs.first() {
-            match params {
-                FuncDeclParams::Ansi {
-                    params,
-                    is_variadic,
-                } => {
-                    if params.len() > 0 && !is_variadic && params.iter().all(|param| {
-                        let FuncParam(name, _) = param;
-                        name.is_some()
-                    }) {
-                        Some(FuncDefParamsKind::KnR)
-                    } else {
-                        Some(FuncDefParamsKind::Ansi)
-                    }
-                }
-                FuncDeclParams::Unspecified => Some(FuncDefParamsKind::Unspecified),
-            }
+    fn from_derivs(derivs: &Vec<Deriv>) -> Option<FuncDefParamsKind> {
+        if let Some(Deriv::Func(params)) = derivs.last() {
+            Some(Self::from_params(params))
         } else {
             None
+        }
+    }
+
+    fn from_params(params: &FuncDeclParams) -> FuncDefParamsKind {
+        match params {
+            FuncDeclParams::Ansi {
+                params,
+                is_variadic,
+            } => {
+                if params.len() > 0 && !is_variadic && params.iter().all(|param| {
+                    let FuncParam(name, derivs) = param;
+                    name.is_some() && derivs.is_none()
+                }) {
+                    FuncDefParamsKind::KnR
+                } else {
+                    FuncDefParamsKind::Ansi
+                }
+            }
+            FuncDeclParams::Unspecified => FuncDefParamsKind::Unspecified,
         }
     }
 }
@@ -529,7 +531,7 @@ impl<'a> Parser<'a> {
                     }
 
                     let (ident, derivs) = self.read_declarator()?;
-                    let ident = if let Some(ident) = ident {
+                    let (ident, _) = if let Some(ident) = ident {
                         ident
                     } else {
                         return Err(ParseError::new_with_position(
@@ -658,8 +660,9 @@ impl<'a> Parser<'a> {
             let (ident, derivs) = self.read_declarator()?;
             let param = if root_type.is_none() && derivs.is_empty() {
                 // No type
-                if ident.is_none() {
-                    match self.next_token_pos()? {
+                let (ident, _) = match ident {
+                    Some(ident) => ident,
+                    None => match self.next_token_pos()? {
                         Some(pos) => {
                             return Err(ParseError::new_with_position(
                                 ParseErrorKind::InvalidConstruct,
@@ -674,9 +677,9 @@ impl<'a> Parser<'a> {
                                 "unfinished declaration at the end of the file".to_string(),
                             ))
                         }
-                    }
-                }
-                FuncParam(ident, None)
+                    },
+                };
+                FuncParam(Some(ident), None)
             } else {
                 let root_type = root_type.unwrap_or_else(|| {
                     QualifiedType(
@@ -684,7 +687,10 @@ impl<'a> Parser<'a> {
                         TypeQualifiers::empty(),
                     )
                 });
-                FuncParam(ident, Some(DerivedType(root_type, derivs)))
+                FuncParam(
+                    ident.map(|(ident, _)| ident),
+                    Some(DerivedType(root_type, derivs)),
+                )
             };
             params.push(param);
 
@@ -736,7 +742,7 @@ impl<'a> Parser<'a> {
         Ok(ArraySize::Fixed(size))
     }
 
-    fn read_declarator(&mut self) -> Result<(Option<String>, Vec<Deriv>), ParseError> {
+    fn read_declarator(&mut self) -> Result<(Option<(String, Position)>, Vec<Deriv>), ParseError> {
         let mut levels = Vec::new();
         let mut current_level = DeclaratorParenLevel::new();
         let ident = loop {
@@ -751,7 +757,7 @@ impl<'a> Parser<'a> {
                 current_level = DeclaratorParenLevel::new();
             } else {
                 levels.push(current_level);
-                break self.iter.next_if_any_ident()?.map(|(ident, _)| ident);
+                break self.iter.next_if_any_ident()?;
             }
         };
         for (i, level) in levels.iter_mut().enumerate().rev() {
@@ -1028,20 +1034,16 @@ impl<'a> Parser<'a> {
 
     fn read_func_def(
         &mut self,
-        func_def_kind: FuncDefParamsKind,
         ident: String,
+        pos: Position,
         decl_spec: Option<DeclSpec>,
         mut derivs: Vec<Deriv>,
     ) -> Result<ExtDecl, ParseError> {
-        let pos = self.expect_token(&Token::Punctuator(Punctuator::LeftCurlyBracket))?;
-
-        let params = if let Deriv::Func(params) = derivs.remove(0) {
+        let params = if let Deriv::Func(params) = derivs.pop().unwrap() {
             params
         } else {
             unreachable!()
         };
-
-        self.skip_func_body()?;
 
         let (qual_type, linkage, func_specifiers, is_thread_local) = match decl_spec {
             Some(DeclSpec::Decl {
@@ -1071,8 +1073,119 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let def = FuncDef(ident, linkage, func_specifiers, qual_type, params.into());
-        return Ok(ExtDecl::FuncDef(def));
+        let params = match FuncDefParamsKind::from_params(&params) {
+            FuncDefParamsKind::Unspecified | FuncDefParamsKind::Ansi => {
+                self.expect_token(&Token::Punctuator(Punctuator::LeftCurlyBracket))?;
+                params.into()
+            }
+            FuncDefParamsKind::KnR => {
+                let mut param_decls = Vec::new();
+                loop {
+                    if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+                        break;
+                    }
+                    let root_type = match self.read_decl_spec()? {
+                        Some(DeclSpec::TypeDef { pos, .. }) => {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a function parameter cannot be a typedef".to_string(),
+                                pos,
+                            ));
+                        }
+                        Some(DeclSpec::Decl {
+                            qual_type,
+                            pos,
+                            linkage,
+                            ..
+                        }) => {
+                            if linkage.is_some() {
+                                return Err(ParseError::new_with_position(
+                                    ParseErrorKind::InvalidConstruct,
+                                    "a function parameter cannot be extern or static".to_string(),
+                                    pos,
+                                ));
+                            }
+                            qual_type
+                        }
+                        None => {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a function parameter requires a type".to_string(),
+                                pos.clone(),
+                            ))
+                        }
+                    };
+                    let mut fields = Vec::new();
+                    let mut did_finish_params_decl = false;
+                    loop {
+                        if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+                            did_finish_params_decl = true;
+                            break;
+                        } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                            break;
+                        }
+
+                        let (ident, derivs) = self.read_declarator()?;
+                        let (ident, _) = if let Some(ident) = ident {
+                            ident
+                        } else {
+                            return Err(ParseError::new_with_position(
+                                ParseErrorKind::InvalidConstruct,
+                                "a struct field requires a name in most cases".to_string(),
+                                pos.clone(),
+                            ));
+                        };
+
+                        fields.push((ident, derivs));
+
+                        if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+                            did_finish_params_decl = true;
+                            break;
+                        } else if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+                            break;
+                        } else {
+                            self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
+                        }
+                    }
+                    param_decls.push(KnRFuncParamDecl(root_type, fields));
+                    if did_finish_params_decl {
+                        break;
+                    }
+                }
+
+                let params = match params {
+                    FuncDeclParams::Ansi {
+                        params,
+                        is_variadic,
+                    } => {
+                        assert!(!is_variadic);
+                        params
+                    }
+                    _ => unreachable!(),
+                };
+                let param_names = params
+                    .into_iter()
+                    .map(|param| match param {
+                        FuncParam(Some(ident), None) => ident,
+                        _ => unreachable!(),
+                    })
+                    .collect::<Vec<_>>();
+
+                FuncDefParams::KnR {
+                    param_names,
+                    decls: param_decls,
+                }
+            }
+        };
+        self.skip_func_body()?;
+        let def = FuncDef(
+            ident,
+            linkage,
+            func_specifiers,
+            DerivedType(qual_type, derivs),
+            params.into(),
+        );
+        Ok(ExtDecl::FuncDef(def))
     }
 }
 
@@ -1094,7 +1207,7 @@ impl<'a> FailableIterator for Parser<'a> {
         if !self.iter.advance_if_punc(Punctuator::Semicolon)? {
             loop {
                 let (ident, derivs) = self.read_declarator()?;
-                let ident = match ident {
+                let (ident, pos) = match ident {
                     Some(ident) => ident,
                     None => {
                         return Err(match self.next_token_pos()? {
@@ -1124,30 +1237,22 @@ impl<'a> FailableIterator for Parser<'a> {
                     ));
                 }
 
-                let func_def_kind = if !is_typedef && declarators.is_empty() {
-                    if let Some(func_def_kind) = FuncDefParamsKind::from(&derivs) {
-                        match self.iter.peek()? {
-                            // If the next token is a ";" or ",", we're in a function declaration, not definition
-                            Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _))
-                            | Some(PositionedToken(Token::Punctuator(Punctuator::Comma), _)) => {
-                                None
-                            }
-                            _ => Some(func_def_kind),
-                        }
-                    } else {
-                        None
+                let is_func_def = if !is_typedef
+                    && declarators.is_empty()
+                    && FuncDefParamsKind::from_derivs(&derivs).is_some()
+                {
+                    match self.iter.peek()? {
+                        // If the next token is a ";" or ",", we're in a function declaration, not definition
+                        Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _))
+                        | Some(PositionedToken(Token::Punctuator(Punctuator::Comma), _)) => false,
+                        _ => true,
                     }
                 } else {
-                    None
+                    false
                 };
 
-                if let Some(func_def_kind) = func_def_kind {
-                    return Ok(Some(self.read_func_def(
-                        func_def_kind,
-                        ident,
-                        decl_spec,
-                        derivs,
-                    )?));
+                if is_func_def {
+                    return Ok(Some(self.read_func_def(ident, pos, decl_spec, derivs)?));
                 }
 
                 declarators.push((ident, derivs));
@@ -1450,9 +1555,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Int),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::Unspecified
             ))]
@@ -1463,9 +1571,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Void),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::Unspecified
             ))]
@@ -1476,9 +1587,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Void),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::Ansi {
                     params: vec![
@@ -1513,9 +1627,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Void),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::KnR {
                     param_names: vec!["a".to_string()],
@@ -1529,9 +1646,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Void),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::KnR {
                     param_names: vec!["a".to_string(), "b".to_string()],
@@ -1551,9 +1671,12 @@ mod tests {
                 "foo".to_string(),
                 None,
                 FuncSpecifiers::empty(),
-                QualifiedType(
-                    UnqualifiedType::Basic(BasicType::Void),
-                    TypeQualifiers::empty()
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![]
                 ),
                 FuncDefParams::KnR {
                     param_names: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -1577,6 +1700,42 @@ mod tests {
                         )
                     ],
                 }
+            ))]
+        );
+        assert_eq!(
+            parse_external_declarations(r#"void *foo() {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![Deriv::Ptr(TypeQualifiers::empty())]
+                ),
+                FuncDefParams::Unspecified
+            ))]
+        );
+
+        assert_eq!(
+            parse_external_declarations(r#"short (*foo())() {}"#),
+            vec![ExtDecl::FuncDef(FuncDef(
+                "foo".to_string(),
+                None,
+                FuncSpecifiers::empty(),
+                DerivedType(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Short),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![
+                        Deriv::Func(FuncDeclParams::Unspecified),
+                        Deriv::Ptr(TypeQualifiers::empty())
+                    ]
+                ),
+                FuncDefParams::Unspecified
             ))]
         );
     }
