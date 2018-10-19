@@ -361,7 +361,7 @@ enum FuncDefParamsKind {
 }
 
 impl FuncDefParamsKind {
-    fn from_derivs(derivs: &Vec<Deriv>) -> Option<FuncDefParamsKind> {
+    fn from_derivs(derivs: &[Deriv]) -> Option<FuncDefParamsKind> {
         if let Some(Deriv::Func(params)) = derivs.last() {
             Some(Self::from_params(params))
         } else {
@@ -375,7 +375,7 @@ impl FuncDefParamsKind {
                 params,
                 is_variadic,
             } => {
-                if params.len() > 0 && !is_variadic && params.iter().all(|param| {
+                if !params.is_empty() && !is_variadic && params.iter().all(|param| {
                     let FuncParam(name, derivs) = param;
                     name.is_some() && derivs.is_none()
                 }) {
@@ -1183,7 +1183,7 @@ impl<'a> Parser<'a> {
             linkage,
             func_specifiers,
             DerivedType(qual_type, derivs),
-            params.into(),
+            params,
         );
         Ok(ExtDecl::FuncDef(def))
     }
