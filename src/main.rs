@@ -1545,6 +1545,143 @@ mod tests {
                 None
             ))]
         );
+        assert_eq!(
+            parse_external_declarations(r#"void foo(int(x));"#),
+            vec![ExtDecl::Decl(Decl(
+                None,
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Void),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "foo".to_string(),
+                    vec![Deriv::Func(FuncDeclParams::Ansi {
+                        params: vec![FuncParam(
+                            Some("x".to_string()),
+                            Some(DerivedType(
+                                QualifiedType(
+                                    UnqualifiedType::Basic(BasicType::Int),
+                                    TypeQualifiers::empty()
+                                ),
+                                vec![]
+                            ))
+                        )],
+                        is_variadic: false
+                    })]
+                )],
+                None
+            ))]
+        );
+        // Yes, C types declaration is crazy stuff
+        assert_eq!(
+            parse_external_declarations(r#"typedef int x; void foo(int(x));"#),
+            vec![
+                ExtDecl::TypeDef(TypeDecl(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![("i".to_string(), vec![])]
+                )),
+                ExtDecl::Decl(Decl(
+                    None,
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![(
+                        "foo".to_string(),
+                        vec![Deriv::Func(FuncDeclParams::Ansi {
+                            params: vec![FuncParam(
+                                None,
+                                Some(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Int),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![Deriv::Func(FuncDeclParams::Ansi {
+                                        params: vec![FuncParam(
+                                            None,
+                                            Some(DerivedType(
+                                                QualifiedType(
+                                                    UnqualifiedType::Custom("x".to_string()),
+                                                    TypeQualifiers::empty()
+                                                ),
+                                                vec![]
+                                            ))
+                                        )],
+                                        is_variadic: false
+                                    })]
+                                ))
+                            )],
+                            is_variadic: false
+                        })]
+                    )],
+                    None
+                ))
+            ]
+        );
+        // That C compilers allow that is beyond me.
+        assert_eq!(
+            parse_external_declarations(r#"typedef int x; void foo(int((x, char)));"#),
+            vec![
+                ExtDecl::TypeDef(TypeDecl(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![("i".to_string(), vec![])]
+                )),
+                ExtDecl::Decl(Decl(
+                    None,
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![(
+                        "foo".to_string(),
+                        vec![Deriv::Func(FuncDeclParams::Ansi {
+                            params: vec![FuncParam(
+                                None,
+                                Some(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Basic(BasicType::Int),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![Deriv::Func(FuncDeclParams::Ansi {
+                                        params: vec![
+                                            FuncParam(
+                                                None,
+                                                Some(DerivedType(
+                                                    QualifiedType(
+                                                        UnqualifiedType::Custom("x".to_string()),
+                                                        TypeQualifiers::empty()
+                                                    ),
+                                                    vec![]
+                                                ))
+                                            ),
+                                            FuncParam(
+                                                None,
+                                                Some(DerivedType(
+                                                    QualifiedType(
+                                                        UnqualifiedType::Basic(BasicType::Char),
+                                                        TypeQualifiers::empty()
+                                                    ),
+                                                    vec![]
+                                                ))
+                                            )
+                                        ],
+                                        is_variadic: false
+                                    })]
+                                ))
+                            )],
+                            is_variadic: false
+                        })]
+                    )],
+                    None
+                ))
+            ]
+        );
     }
 
     #[test]
