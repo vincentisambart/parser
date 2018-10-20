@@ -3,7 +3,8 @@
 // - Move tests to one (or multiple) other files
 // - Add position to declarations
 // - Variable initialization
-// - Error on _Thread_local of typedefs or var decls
+// - Error on _Thread_local in typedefs and other forbidden places
+// - Move parsing code to parser.rs
 
 mod error;
 mod failable;
@@ -325,6 +326,7 @@ impl TypeManager {
     }
 }
 
+#[derive(Debug, Clone)]
 struct DeclaratorParenLevel {
     ptr_qualifs: Vec<TypeQualifiers>,
     func_params: Option<FuncDeclParams>,
@@ -350,6 +352,10 @@ impl DeclaratorParenLevel {
         for array_size in self.array_sizes.into_iter().rev() {
             derivs.push(Deriv::Array(array_size));
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ptr_qualifs.is_empty() && self.func_params.is_none() && self.array_sizes.is_empty()
     }
 }
 
@@ -745,6 +751,7 @@ impl<'a> Parser<'a> {
     fn read_declarator(&mut self) -> Result<(Option<(String, Position)>, Vec<Deriv>), ParseError> {
         let mut levels = Vec::new();
         let mut current_level = DeclaratorParenLevel::new();
+        let mut func_params_paren_already_opened = false;
         let ident = loop {
             if self.iter.advance_if_punc(Punctuator::Star)? {
                 let mut qualifiers = TypeQualifiers::empty();
@@ -757,11 +764,29 @@ impl<'a> Parser<'a> {
                 current_level = DeclaratorParenLevel::new();
             } else {
                 levels.push(current_level);
-                break self.iter.next_if_any_ident()?;
+                match self.iter.peek()? {
+                    Some(PositionedToken(Token::Identifier(ident), _)) => {
+                        if self.type_manager.is_type_name(ident)
+                            && levels.len() > 1 /* at least one parenthesis */
+                            && levels.iter().all(|level| level.is_empty())
+                        {
+                            // a type name just after one or more parentheses (and nothing else) is the first parameter of a function definition
+                            func_params_paren_already_opened = true;
+                            levels.pop();
+                            break None;
+                        } else {
+                            break self.iter.next_if_any_ident()?;
+                        }
+                    }
+                    _ => break None,
+                }
             }
         };
         for (i, level) in levels.iter_mut().enumerate().rev() {
-            if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+            if func_params_paren_already_opened {
+                level.func_params = Some(self.read_func_params()?);
+                func_params_paren_already_opened = false;
+            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
                 level.func_params = Some(self.read_func_params()?);
             }
             while self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
@@ -1581,7 +1606,7 @@ mod tests {
                         UnqualifiedType::Basic(BasicType::Int),
                         TypeQualifiers::empty()
                     ),
-                    vec![("i".to_string(), vec![])]
+                    vec![("x".to_string(), vec![])]
                 )),
                 ExtDecl::Decl(Decl(
                     None,
@@ -1621,6 +1646,42 @@ mod tests {
                 ))
             ]
         );
+        assert_eq!(
+            parse_external_declarations(r#"typedef int x; void foo(x);"#),
+            vec![
+                ExtDecl::TypeDef(TypeDecl(
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Int),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![("x".to_string(), vec![])]
+                )),
+                ExtDecl::Decl(Decl(
+                    None,
+                    QualifiedType(
+                        UnqualifiedType::Basic(BasicType::Void),
+                        TypeQualifiers::empty()
+                    ),
+                    vec![(
+                        "foo".to_string(),
+                        vec![Deriv::Func(FuncDeclParams::Ansi {
+                            params: vec![FuncParam(
+                                None,
+                                Some(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Custom("x".to_string()),
+                                        TypeQualifiers::empty()
+                                    ),
+                                    vec![]
+                                ))
+                            )],
+                            is_variadic: false
+                        })]
+                    )],
+                    None
+                ))
+            ]
+        );
         // That C compilers allow that is beyond me.
         assert_eq!(
             parse_external_declarations(r#"typedef int x; void foo(int((x, char)));"#),
@@ -1630,7 +1691,7 @@ mod tests {
                         UnqualifiedType::Basic(BasicType::Int),
                         TypeQualifiers::empty()
                     ),
-                    vec![("i".to_string(), vec![])]
+                    vec![("x".to_string(), vec![])]
                 )),
                 ExtDecl::Decl(Decl(
                     None,
