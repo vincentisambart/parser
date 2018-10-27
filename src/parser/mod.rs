@@ -243,8 +243,7 @@ pub struct TypeDecl(QualifiedType, Vec<(String, Vec<Deriv>)>);
 pub struct Decl(
     Option<Linkage>,
     QualifiedType,
-    Vec<(String, Vec<Deriv>)>,
-    Option<ConstExpr>,
+    Vec<(String, Vec<Deriv>, Option<ConstExpr>)>,
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,7 +440,7 @@ impl<'a> Parser<'a> {
                     break;
                 } else if let Some((value_name, _)) = self.iter.next_if_any_ident()? {
                     if self.iter.advance_if_punc(Punctuator::Equal)? {
-                        let value = self.read_constant_value()?;
+                        let value = self.read_const_expr()?;
                         enum_values.push(EnumItem(value_name, Some(value)));
                     } else {
                         enum_values.push(EnumItem(value_name, None));
@@ -537,7 +536,7 @@ impl<'a> Parser<'a> {
                     };
 
                     let bit_size = if self.iter.advance_if_punc(Punctuator::Colon)? {
-                        Some(self.read_constant_value()?)
+                        Some(self.read_const_expr()?)
                     } else {
                         None
                     };
@@ -709,7 +708,7 @@ impl<'a> Parser<'a> {
     }
 
     // TODO: The return value should be the AST of an expression
-    fn read_constant_value(&mut self) -> Result<ConstExpr, ParseError> {
+    fn read_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
         match self.iter.next()? {
             Some(PositionedToken(Token::IntegerLiteral(literal, repr, _), _)) => {
                 Ok(u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap())
@@ -732,7 +731,7 @@ impl<'a> Parser<'a> {
             return Ok(ArraySize::Unspecified);
         }
 
-        let size = self.read_constant_value()?;
+        let size = self.read_const_expr()?;
         self.expect_token(&Token::Punctuator(Punctuator::RightSquareBracket))?;
         Ok(ArraySize::Fixed(size))
     }
@@ -1302,7 +1301,13 @@ impl<'a> Parser<'a> {
                     return Ok(self.read_func_def(ident, pos, decl_spec, derivs)?);
                 }
 
-                declarators.push((ident, derivs));
+                let const_expr = if self.iter.advance_if_punc(Punctuator::Equal)? {
+                    Some(self.read_const_expr()?)
+                } else {
+                    None
+                };
+
+                declarators.push((ident, derivs, const_expr));
 
                 match self.iter.next()? {
                     Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _)) => break,
@@ -1334,7 +1339,7 @@ impl<'a> Parser<'a> {
             }
             Some(DeclSpec::Decl {
                 qual_type, linkage, ..
-            }) => ExtDecl::Decl(Decl(linkage, qual_type, declarators, None)),
+            }) => ExtDecl::Decl(Decl(linkage, qual_type, declarators)),
             None => ExtDecl::Decl(Decl(
                 None,
                 QualifiedType(
@@ -1342,7 +1347,6 @@ impl<'a> Parser<'a> {
                     TypeQualifiers::empty(),
                 ),
                 declarators,
-                None,
             )),
         };
         Ok(ext_decl)

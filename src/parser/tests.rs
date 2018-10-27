@@ -19,8 +19,7 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![])],
-            None
+            vec![("abcd".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -31,8 +30,7 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![])],
-            None,
+            vec![("abcd".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -43,8 +41,7 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![])],
-            None
+            vec![("abcd".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -55,8 +52,7 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::Long),
                 TypeQualifiers::empty()
             ),
-            vec![],
-            None
+            vec![]
         ))]
     );
     assert_eq!(
@@ -67,8 +63,7 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::UnsignedChar),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![])],
-            None
+            vec![("abcd".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -81,9 +76,9 @@ fn test_simple_declaration() {
             ),
             vec![(
                 "abcd".to_string(),
-                vec![Deriv::Ptr(TypeQualifiers::empty())]
-            )],
-            None
+                vec![Deriv::Ptr(TypeQualifiers::empty())],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -96,9 +91,9 @@ fn test_simple_declaration() {
             ),
             vec![(
                 "abcd".to_string(),
-                vec![Deriv::Ptr(TypeQualifiers::empty())]
-            )],
-            None
+                vec![Deriv::Ptr(TypeQualifiers::empty())],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -111,9 +106,9 @@ fn test_simple_declaration() {
             ),
             vec![(
                 "abcd".to_string(),
-                vec![Deriv::Ptr(TypeQualifiers::empty())]
-            )],
-            None
+                vec![Deriv::Ptr(TypeQualifiers::empty())],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -126,9 +121,9 @@ fn test_simple_declaration() {
             ),
             vec![(
                 "abcd".to_string(),
-                vec![Deriv::Ptr(TypeQualifiers::empty())]
-            )],
-            None
+                vec![Deriv::Ptr(TypeQualifiers::empty())],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -139,8 +134,11 @@ fn test_simple_declaration() {
                 UnqualifiedType::Basic(BasicType::Float),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![Deriv::Ptr(TypeQualifiers::CONST)])],
-            None
+            vec![(
+                "abcd".to_string(),
+                vec![Deriv::Ptr(TypeQualifiers::CONST)],
+                None
+            )]
         ))]
     );
 }
@@ -157,9 +155,9 @@ fn test_function_declaration() {
             ),
             vec![(
                 "foo".to_string(),
-                vec![Deriv::Func(FuncDeclParams::Unspecified)]
-            )],
-            None
+                vec![Deriv::Func(FuncDeclParams::Unspecified)],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -175,9 +173,9 @@ fn test_function_declaration() {
                 vec![Deriv::Func(FuncDeclParams::Ansi {
                     params: vec![],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -214,9 +212,9 @@ fn test_function_declaration() {
                         )
                     ],
                     is_variadic: true
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     // function returning a function pointer
@@ -234,9 +232,9 @@ fn test_function_declaration() {
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Func(FuncDeclParams::Unspecified)
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -261,9 +259,9 @@ fn test_function_declaration() {
                         ))
                     )],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     // Yes, C types declaration is crazy stuff
@@ -309,9 +307,9 @@ fn test_function_declaration() {
                             ))
                         )],
                         is_variadic: false
-                    })]
-                )],
-                None
+                    })],
+                    None
+                )]
             ))
         ]
     );
@@ -345,9 +343,9 @@ fn test_function_declaration() {
                             ))
                         )],
                         is_variadic: false
-                    })]
-                )],
-                None
+                    })],
+                    None
+                )]
             ))
         ]
     );
@@ -406,9 +404,9 @@ fn test_function_declaration() {
                             ))
                         )],
                         is_variadic: false
-                    })]
-                )],
-                None
+                    })],
+                    None
+                )]
             ))
         ]
     );
@@ -622,9 +620,9 @@ fn test_function_pointer_declaration() {
                 vec![
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty())
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -640,9 +638,9 @@ fn test_function_pointer_declaration() {
                 vec![
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty())
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -660,9 +658,9 @@ fn test_function_pointer_declaration() {
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty())
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -679,9 +677,9 @@ fn test_function_pointer_declaration() {
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Func(FuncDeclParams::Unspecified)
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -699,9 +697,9 @@ fn test_function_pointer_declaration() {
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Ptr(TypeQualifiers::empty())
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
 }
@@ -716,8 +714,11 @@ fn test_array_declaration() {
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty()
             ),
-            vec![("foo".to_string(), vec![Deriv::Array(ArraySize::Fixed(10))])],
-            None
+            vec![(
+                "foo".to_string(),
+                vec![Deriv::Array(ArraySize::Fixed(10))],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -733,9 +734,9 @@ fn test_array_declaration() {
                 vec![
                     Deriv::Array(ArraySize::Fixed(3)),
                     Deriv::Array(ArraySize::Fixed(1))
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
 
@@ -762,9 +763,9 @@ fn test_array_declaration() {
                         ))
                     )],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -782,9 +783,9 @@ fn test_array_declaration() {
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Array(ArraySize::Fixed(3))
-                ]
-            )],
-            None
+                ],
+                None
+            )]
         ))]
     );
 }
@@ -823,8 +824,7 @@ fn test_simple_type_definition() {
                     UnqualifiedType::Custom("ptr".to_string()),
                     TypeQualifiers::CONST
                 ),
-                vec![("foo".to_string(), vec![])],
-                None
+                vec![("foo".to_string(), vec![], None)]
             ))
         ]
     );
@@ -848,10 +848,13 @@ fn test_simple_type_definition() {
                     TypeQualifiers::empty()
                 ),
                 vec![
-                    ("foo".to_string(), vec![]),
-                    ("bar".to_string(), vec![Deriv::Ptr(TypeQualifiers::empty())])
-                ],
-                None
+                    ("foo".to_string(), vec![], None),
+                    (
+                        "bar".to_string(),
+                        vec![Deriv::Ptr(TypeQualifiers::empty())],
+                        None
+                    )
+                ]
             ))
         ]
     );
@@ -917,8 +920,7 @@ fn test_tag_definition() {
                 UnqualifiedType::Tag(Tag::Enum(Some("foo".to_string()), None)),
                 TypeQualifiers::empty()
             ),
-            vec![],
-            None
+            vec![]
         ))]
     );
     assert_eq!(
@@ -929,8 +931,7 @@ fn test_tag_definition() {
                 UnqualifiedType::Tag(Tag::Enum(Some("foo".to_string()), None)),
                 TypeQualifiers::empty()
             ),
-            vec![("bar".to_string(), vec![])],
-            None
+            vec![("bar".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -948,8 +949,7 @@ fn test_tag_definition() {
                 )),
                 TypeQualifiers::empty()
             ),
-            vec![("bar".to_string(), vec![])],
-            None
+            vec![("bar".to_string(), vec![], None)]
         ))]
     );
     assert_eq!(
@@ -972,9 +972,9 @@ fn test_tag_definition() {
                 vec![Deriv::Func(FuncDeclParams::Ansi {
                     params: vec![],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -997,9 +997,9 @@ fn test_tag_definition() {
                 vec![Deriv::Func(FuncDeclParams::Ansi {
                     params: vec![],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -1035,9 +1035,9 @@ fn test_tag_definition() {
                         ))
                     )],
                     is_variadic: false
-                })]
-            )],
-            None
+                })],
+                None
+            )]
         ))]
     );
     assert_eq!(
@@ -1055,8 +1055,7 @@ fn test_tag_definition() {
                 )),
                 TypeQualifiers::empty()
             ),
-            vec![],
-            None
+            vec![]
         ))]
     );
     assert_eq!(
@@ -1079,8 +1078,7 @@ fn test_tag_definition() {
                 )),
                 TypeQualifiers::empty()
             ),
-            vec![],
-            None
+            vec![]
         ))]
     );
     // self-referencing struct
@@ -1105,8 +1103,7 @@ fn test_tag_definition() {
                 )),
                 TypeQualifiers::empty()
             ),
-            vec![],
-            None
+            vec![]
         ))]
     );
     assert_eq!(
@@ -1164,26 +1161,22 @@ fn test_tag_definition() {
                 )),
                 TypeQualifiers::empty()
             ),
-            vec![("foo".to_string(), vec![])],
-            None
+            vec![("foo".to_string(), vec![], None)]
         ))]
     );
 }
 
-
-// #[test]
-// fn test_variable_initialization() {
-//      assert_eq!(
-//         parse_external_declarations(r#"int abcd = 42;"#),
-//         vec![ExtDecl::Decl(Decl(
-//             None,
-//             QualifiedType(
-//                 UnqualifiedType::Basic(BasicType::Int),
-//                 TypeQualifiers::empty()
-//             ),
-//             vec![("abcd".to_string(), vec![])],
-//             Some(42)
-//         ))]
-//     );
-   
-// }
+#[test]
+fn test_variable_initialization() {
+    assert_eq!(
+        parse_external_declarations(r#"int abcd = 42;"#),
+        vec![ExtDecl::Decl(Decl(
+            None,
+            QualifiedType(
+                UnqualifiedType::Basic(BasicType::Int),
+                TypeQualifiers::empty()
+            ),
+            vec![("abcd".to_string(), vec![], Some(42))],
+        ))]
+    );
+}
