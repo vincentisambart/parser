@@ -1201,22 +1201,69 @@ impl<'a> Parser<'a> {
         );
         Ok(ExtDecl::FuncDef(def))
     }
-}
 
-impl<'a> FailableIterator for Parser<'a> {
-    type Item = ExtDecl;
-    type Error = ParseError;
-
-    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
-        if self.iter.peek()?.is_none() {
-            return Ok(None);
+    fn read_type_def(&mut self, qual_type: QualifiedType) -> Result<ExtDecl, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::Semicolon)? {
+            return Ok(ExtDecl::TypeDef(TypeDecl(qual_type, Vec::new())));
         }
-        let decl_spec = self.read_decl_spec()?;
-        let is_typedef = match &decl_spec {
-            Some(DeclSpec::TypeDef { .. }) => true,
-            _ => false,
-        };
 
+        let mut declarators = Vec::new();
+        loop {
+            let (ident, derivs) = self.read_declarator()?;
+            let (ident, pos) = match ident {
+                Some(ident) => ident,
+                None => {
+                    return Err(match self.next_token_pos()? {
+                        Some(pos) => ParseError::new_with_position(
+                            ParseErrorKind::InvalidConstruct,
+                            "a typedef should have an identifier".to_string(),
+                            pos,
+                        ),
+                        None => ParseError::new(
+                            ParseErrorKind::UnexpectedEOF,
+                            "unfinished typedef at the end of the file".to_string(),
+                        ),
+                    })
+                }
+            };
+
+            if !self.type_manager.add_type_to_current_scope(ident.clone()) {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidConstruct,
+                    format!("trying to redefine the already defined type {}", ident),
+                    pos,
+                ));
+            }
+
+            declarators.push((ident, derivs));
+
+            match self.iter.next()? {
+                Some(PositionedToken(Token::Punctuator(Punctuator::Semicolon), _)) => break,
+                Some(PositionedToken(Token::Punctuator(Punctuator::Comma), _)) => (),
+                Some(PositionedToken(token, pos)) => {
+                    let message = format!(
+                        "got {:?} in typedef where expecting a comma or semicolon",
+                        token
+                    );
+                    return Err(ParseError::new_with_position(
+                        ParseErrorKind::UnexpectedToken(token),
+                        message,
+                        pos,
+                    ));
+                }
+                None => {
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnexpectedEOF,
+                        "end of file where expecting a comma or semicolon".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(ExtDecl::TypeDef(TypeDecl(qual_type, declarators)))
+    }
+
+    fn read_decl_or_def(&mut self, decl_spec: Option<DeclSpec>) -> Result<ExtDecl, ParseError> {
         let mut declarators = Vec::new();
         if !self.iter.advance_if_punc(Punctuator::Semicolon)? {
             loop {
@@ -1238,21 +1285,7 @@ impl<'a> FailableIterator for Parser<'a> {
                     }
                 };
 
-                if is_typedef && !self.type_manager.add_type_to_current_scope(ident.clone()) {
-                    let pos = if let Some(DeclSpec::TypeDef { pos, .. }) = decl_spec {
-                        pos
-                    } else {
-                        unreachable!();
-                    };
-                    return Err(ParseError::new_with_position(
-                        ParseErrorKind::InvalidConstruct,
-                        format!("trying to redefine the already defined type {}", ident),
-                        pos,
-                    ));
-                }
-
-                let is_func_def = if !is_typedef
-                    && declarators.is_empty()
+                let is_func_def = if declarators.is_empty()
                     && FuncDefParamsKind::from_derivs(&derivs).is_some()
                 {
                     match self.iter.peek()? {
@@ -1266,7 +1299,7 @@ impl<'a> FailableIterator for Parser<'a> {
                 };
 
                 if is_func_def {
-                    return Ok(Some(self.read_func_def(ident, pos, decl_spec, derivs)?));
+                    return Ok(self.read_func_def(ident, pos, decl_spec, derivs)?);
                 }
 
                 declarators.push((ident, derivs));
@@ -1296,8 +1329,8 @@ impl<'a> FailableIterator for Parser<'a> {
         }
 
         let ext_decl = match decl_spec {
-            Some(DeclSpec::TypeDef { qual_type, .. }) => {
-                ExtDecl::TypeDef(TypeDecl(qual_type, declarators))
+            Some(DeclSpec::TypeDef { .. }) => {
+                panic!("read_decl_or_def should not be called with a typedef")
             }
             Some(DeclSpec::Decl {
                 qual_type, linkage, ..
@@ -1311,6 +1344,23 @@ impl<'a> FailableIterator for Parser<'a> {
                 declarators,
                 None,
             )),
+        };
+        Ok(ext_decl)
+    }
+}
+
+impl<'a> FailableIterator for Parser<'a> {
+    type Item = ExtDecl;
+    type Error = ParseError;
+
+    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        if self.iter.peek()?.is_none() {
+            return Ok(None);
+        }
+        let decl_spec = self.read_decl_spec()?;
+        let ext_decl = match decl_spec {
+            Some(DeclSpec::TypeDef { qual_type, .. }) => self.read_type_def(qual_type)?,
+            _ => self.read_decl_or_def(decl_spec)?,
         };
         Ok(Some(ext_decl))
     }

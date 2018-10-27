@@ -1169,3 +1169,21 @@ fn test_tag_definition() {
         ))]
     );
 }
+
+
+// #[test]
+// fn test_variable_initialization() {
+//      assert_eq!(
+//         parse_external_declarations(r#"int abcd = 42;"#),
+//         vec![ExtDecl::Decl(Decl(
+//             None,
+//             QualifiedType(
+//                 UnqualifiedType::Basic(BasicType::Int),
+//                 TypeQualifiers::empty()
+//             ),
+//             vec![("abcd".to_string(), vec![])],
+//             Some(42)
+//         ))]
+//     );
+   
+// }
