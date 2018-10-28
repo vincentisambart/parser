@@ -177,10 +177,19 @@ pub enum UnaryOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstExpr {
     Literal(Literal),
-    UnaryOp(BinaryOp, Box<ConstExpr>),
+    Identifier(String),
+    UnaryOp(UnaryOp, Box<ConstExpr>),
     BinaryOp(BinaryOp, Box<ConstExpr>, Box<ConstExpr>),
     TernaryOp(Box<ConstExpr>, Box<ConstExpr>, Box<ConstExpr>),
-    SizeOf(DerivedType),
+    SizeOfType(DerivedType),
+    SizeOfExpr(Box<ConstExpr>),
+    Cast(DerivedType, Box<ConstExpr>),
+    // Some of the expressions below are by themselves not constant,
+    // but can be given to sizeof in a constant expression.
+    Subscript(Box<ConstExpr>, Box<ConstExpr>),
+    Member(Box<ConstExpr>, Box<ConstExpr>),
+    PtrMember(Box<ConstExpr>, Box<ConstExpr>),
+    FuncCall(Box<ConstExpr>, Vec<ConstExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -752,9 +761,15 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn read_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
+    fn read_primary_expr(&mut self) -> Result<ConstExpr, ParseError> {
         match self.iter.next()? {
             Some(PositionedToken(Token::Literal(literal), _)) => Ok(ConstExpr::Literal(literal)),
+            Some(PositionedToken(Token::Identifier(ident), _)) => Ok(ConstExpr::Identifier(ident)),
+            Some(PositionedToken(Token::Punctuator(Punctuator::LeftParenthesis), _)) => {
+                let expr = self.read_const_expr()?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
+                Ok(expr)
+            }
             Some(PositionedToken(token, position)) => Err(ParseError::new_with_position(
                 ParseErrorKind::UnexpectedToken(token),
                 "currently only supporting integer literal constant values".to_string(),
@@ -762,8 +777,284 @@ impl<'a> Parser<'a> {
             )),
             None => Err(ParseError::new(
                 ParseErrorKind::UnexpectedEOF,
-                "end of line when expecting a constant value".to_string(),
+                "end of line when expecting an expression value".to_string(),
             )),
+        }
+    }
+
+    fn read_postfix_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let expr = self.read_primary_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
+                unimplemented!()
+            } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                unimplemented!()
+            } else if self.iter.advance_if_punc(Punctuator::Period)? {
+                unimplemented!()
+            } else if self.iter.advance_if_punc(Punctuator::Arrow)? {
+                unimplemented!()
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_unary_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let unary_expr = if self.iter.advance_if_punc(Punctuator::Ampersand)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::Addr, Box::new(expr))
+        } else if self.iter.advance_if_punc(Punctuator::Star)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::Deref, Box::new(expr))
+        } else if self.iter.advance_if_punc(Punctuator::Plus)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::Plus, Box::new(expr))
+        } else if self.iter.advance_if_punc(Punctuator::Minus)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::Minus, Box::new(expr))
+        } else if self.iter.advance_if_punc(Punctuator::Tilde)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::BinNot, Box::new(expr))
+        } else if self.iter.advance_if_punc(Punctuator::Exclamation)? {
+            let expr = self.read_cast_expr()?;
+            ConstExpr::UnaryOp(UnaryOp::LogicNot, Box::new(expr))
+        } else if self.iter.advance_if_kw(Keyword::Sizeof)? {
+            if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+                if self.is_before_type()? {
+                    let derived_type = self.read_just_type()?;
+                    self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
+                    ConstExpr::SizeOfType(derived_type)
+                } else {
+                    let expr = self.read_const_expr()?;
+                    self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
+                    ConstExpr::SizeOfExpr(Box::new(expr))
+                }
+            } else {
+                let expr = self.read_unary_expr()?;
+                ConstExpr::SizeOfExpr(Box::new(expr))
+            }
+        } else {
+            self.read_postfix_expr()?
+        };
+        Ok(unary_expr)
+    }
+
+    // Read a type without variable name, for casts or sizeof.
+    // Must only be called if you already know there's a type to read.
+    fn read_just_type(&mut self) -> Result<DerivedType, ParseError> {
+        let qual_type = match self.read_decl_spec()? {
+            Some(DeclSpec::TypeDef { pos, .. }) => {
+                return Err(ParseError::new_with_position(
+                    ParseErrorKind::InvalidConstruct,
+                    "expection a type, not a typedef".to_string(),
+                    pos,
+                ));
+            }
+            Some(DeclSpec::Decl { qual_type, .. }) => qual_type,
+            None => unreachable!(),
+        };
+        let (ident, derivs) = self.read_declarator()?;
+        if let Some((_, pos)) = ident {
+            return Err(ParseError::new_with_position(
+                ParseErrorKind::InvalidConstruct,
+                "expection a type without variable name".to_string(),
+                pos,
+            ));
+        }
+        Ok(DerivedType(qual_type, derivs))
+    }
+
+    fn is_before_type(&mut self) -> Result<bool, ParseError> {
+        let looks_like_type = match self.iter.peek()? {
+            Some(PositionedToken(Token::Keyword(kw), _)) => match kw {
+                Keyword::Const
+                | Keyword::Volatile
+                | Keyword::Restrict
+                | Keyword::Atomic
+                | Keyword::Void
+                | Keyword::Int
+                | Keyword::Long
+                | Keyword::Short
+                | Keyword::Char
+                | Keyword::Signed
+                | Keyword::Unsigned
+                | Keyword::Double
+                | Keyword::Float
+                | Keyword::Bool
+                | Keyword::Complex
+                | Keyword::Enum
+                | Keyword::Struct
+                | Keyword::Union => true,
+                _ => false,
+            },
+            Some(PositionedToken(Token::Identifier(ident), _)) => {
+                self.type_manager.is_type_name(ident.as_ref())
+            }
+            _ => false,
+        };
+        Ok(looks_like_type)
+    }
+
+    fn read_cast_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
+            // Is it a cast, or a parenthesized expression?
+            if self.is_before_type()? {
+                let derived_type = self.read_just_type()?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
+                let expr = self.read_cast_expr()?;
+                Ok(ConstExpr::Cast(derived_type, Box::new(expr)))
+            } else {
+                let expr = self.read_const_expr()?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightParenthesis))?;
+                Ok(expr)
+            }
+        } else {
+            self.read_unary_expr()
+        }
+    }
+
+    fn read_mul_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_cast_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::Star)? {
+                let rhs = self.read_cast_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Mul, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::Slash)? {
+                let rhs = self.read_cast_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Div, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::Percent)? {
+                let rhs = self.read_cast_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Mod, Box::new(expr), Box::new(rhs));
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_add_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_mul_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::Plus)? {
+                let rhs = self.read_mul_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Add, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::Minus)? {
+                let rhs = self.read_mul_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Sub, Box::new(expr), Box::new(rhs));
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_shift_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_add_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::LessLess)? {
+                let rhs = self.read_add_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::ShiftLeft, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::GreaterGreater)? {
+                let rhs = self.read_add_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::ShiftRight, Box::new(expr), Box::new(rhs));
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_rel_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_shift_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::Less)? {
+                let rhs = self.read_shift_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Less, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::Greater)? {
+                let rhs = self.read_shift_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Greater, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::LessEqual)? {
+                let rhs = self.read_shift_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::LessEq, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::GreaterEqual)? {
+                let rhs = self.read_shift_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::GreaterEq, Box::new(expr), Box::new(rhs));
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_eq_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_rel_expr()?;
+        loop {
+            if self.iter.advance_if_punc(Punctuator::EqualEqual)? {
+                let rhs = self.read_rel_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::Eq, Box::new(expr), Box::new(rhs));
+            } else if self.iter.advance_if_punc(Punctuator::ExclamationEqual)? {
+                let rhs = self.read_rel_expr()?;
+                expr = ConstExpr::BinaryOp(BinaryOp::NotEq, Box::new(expr), Box::new(rhs));
+            } else {
+                break Ok(expr);
+            }
+        }
+    }
+
+    fn read_and_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_eq_expr()?;
+        while self.iter.advance_if_punc(Punctuator::Ampersand)? {
+            let rhs = self.read_eq_expr()?;
+            expr = ConstExpr::BinaryOp(BinaryOp::BinaryAnd, Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn read_xor_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_and_expr()?;
+        while self.iter.advance_if_punc(Punctuator::Caret)? {
+            let rhs = self.read_and_expr()?;
+            expr = ConstExpr::BinaryOp(BinaryOp::BinaryXor, Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn read_or_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_xor_expr()?;
+        while self.iter.advance_if_punc(Punctuator::Pipe)? {
+            let rhs = self.read_xor_expr()?;
+            expr = ConstExpr::BinaryOp(BinaryOp::BinaryOr, Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn read_logical_and_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_or_expr()?;
+        while self.iter.advance_if_punc(Punctuator::AmpersandAmpersand)? {
+            let rhs = self.read_or_expr()?;
+            expr = ConstExpr::BinaryOp(BinaryOp::LogicAnd, Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn read_logical_or_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut expr = self.read_logical_and_expr()?;
+        while self.iter.advance_if_punc(Punctuator::PipePipe)? {
+            let rhs = self.read_logical_and_expr()?;
+            expr = ConstExpr::BinaryOp(BinaryOp::LogicOr, Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn read_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let expr = self.read_logical_or_expr()?;
+        if self.iter.advance_if_punc(Punctuator::Question)? {
+            let second_expr = self.read_const_expr()?;
+            self.expect_token(&Token::Punctuator(Punctuator::Colon))?;
+            let third_expr = self.read_const_expr()?;
+            Ok(ConstExpr::TernaryOp(
+                Box::new(expr),
+                Box::new(second_expr),
+                Box::new(third_expr),
+            ))
+        } else {
+            Ok(expr)
         }
     }
 

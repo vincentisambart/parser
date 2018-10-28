@@ -835,7 +835,7 @@ fn test_array_declaration() {
                                 ))),
                                 Box::new(ConstExpr::BinaryOp(
                                     BinaryOp::Mul,
-                                    Box::new(ConstExpr::SizeOf(DerivedType(
+                                    Box::new(ConstExpr::SizeOfType(DerivedType(
                                         QualifiedType(
                                             UnqualifiedType::Custom("__int32_t".to_string()),
                                             TypeQualifiers::empty(),
@@ -864,7 +864,7 @@ fn test_array_declaration() {
                             ))),
                             Box::new(ConstExpr::BinaryOp(
                                 BinaryOp::Mul,
-                                Box::new(ConstExpr::SizeOf(DerivedType(
+                                Box::new(ConstExpr::SizeOfType(DerivedType(
                                     QualifiedType(
                                         UnqualifiedType::Custom("__int32_t".to_string()),
                                         TypeQualifiers::empty(),
@@ -889,7 +889,7 @@ fn test_array_declaration() {
                                 ))),
                                 Box::new(ConstExpr::BinaryOp(
                                     BinaryOp::Mul,
-                                    Box::new(ConstExpr::SizeOf(DerivedType(
+                                    Box::new(ConstExpr::SizeOfType(DerivedType(
                                         QualifiedType(
                                             UnqualifiedType::Custom("__int32_t".to_string()),
                                             TypeQualifiers::empty(),
