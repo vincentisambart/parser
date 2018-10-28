@@ -803,6 +803,118 @@ fn test_array_declaration() {
             )]
         ))]
     );
+    // move code to a different line or else the assertion won't get formatted but rustfmt
+    let fds_bits_code = r#"typedef int __int32_t; __int32_t fds_bits[((((1024) % ((sizeof(__int32_t) * 8))) == 0) ? ((1024) / ((sizeof(__int32_t) * 8))) : (((1024) / ((sizeof(__int32_t) * 8))) + 1))];"#;
+    assert_eq!(
+        parse_external_declarations(fds_bits_code),
+        vec![
+            ExtDecl::TypeDef(TypeDecl(
+                QualifiedType(
+                    UnqualifiedType::Basic(BasicType::Int),
+                    TypeQualifiers::empty()
+                ),
+                vec![("__int32_t".to_string(), vec![])]
+            )),
+            ExtDecl::Decl(Decl(
+                None,
+                QualifiedType(
+                    UnqualifiedType::Custom("__int32_t".to_string()),
+                    TypeQualifiers::empty()
+                ),
+                vec![(
+                    "fds_bits".to_string(),
+                    vec![Deriv::Array(ArraySize::Fixed(ConstExpr::TernaryOp(
+                        Box::new(ConstExpr::BinaryOp(
+                            BinaryOp::Eq,
+                            Box::new(ConstExpr::BinaryOp(
+                                BinaryOp::Mod,
+                                Box::new(ConstExpr::Literal(Literal::Integer(
+                                    "1024".to_string(),
+                                    IntegerRepr::Dec,
+                                    None
+                                ))),
+                                Box::new(ConstExpr::BinaryOp(
+                                    BinaryOp::Mul,
+                                    Box::new(ConstExpr::SizeOf(DerivedType(
+                                        QualifiedType(
+                                            UnqualifiedType::Custom("__int32_t".to_string()),
+                                            TypeQualifiers::empty(),
+                                        ),
+                                        vec![]
+                                    ))),
+                                    Box::new(ConstExpr::Literal(Literal::Integer(
+                                        "8".to_string(),
+                                        IntegerRepr::Dec,
+                                        None
+                                    )))
+                                ))
+                            )),
+                            Box::new(ConstExpr::Literal(Literal::Integer(
+                                "0".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        )),
+                        Box::new(ConstExpr::BinaryOp(
+                            BinaryOp::Div,
+                            Box::new(ConstExpr::Literal(Literal::Integer(
+                                "1024".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            ))),
+                            Box::new(ConstExpr::BinaryOp(
+                                BinaryOp::Mul,
+                                Box::new(ConstExpr::SizeOf(DerivedType(
+                                    QualifiedType(
+                                        UnqualifiedType::Custom("__int32_t".to_string()),
+                                        TypeQualifiers::empty(),
+                                    ),
+                                    vec![]
+                                ))),
+                                Box::new(ConstExpr::Literal(Literal::Integer(
+                                    "8".to_string(),
+                                    IntegerRepr::Dec,
+                                    None
+                                )))
+                            ))
+                        )),
+                        Box::new(ConstExpr::BinaryOp(
+                            BinaryOp::Add,
+                            Box::new(ConstExpr::BinaryOp(
+                                BinaryOp::Div,
+                                Box::new(ConstExpr::Literal(Literal::Integer(
+                                    "1024".to_string(),
+                                    IntegerRepr::Dec,
+                                    None
+                                ))),
+                                Box::new(ConstExpr::BinaryOp(
+                                    BinaryOp::Mul,
+                                    Box::new(ConstExpr::SizeOf(DerivedType(
+                                        QualifiedType(
+                                            UnqualifiedType::Custom("__int32_t".to_string()),
+                                            TypeQualifiers::empty(),
+                                        ),
+                                        vec![]
+                                    ))),
+                                    Box::new(ConstExpr::Literal(Literal::Integer(
+                                        "8".to_string(),
+                                        IntegerRepr::Dec,
+                                        None
+                                    )))
+                                ))
+                            )),
+                            Box::new(ConstExpr::Literal(Literal::Integer(
+                                "1".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ))
+                    )))],
+                    None
+                )]
+            ))
+        ]
+    );
 }
 
 #[test]
@@ -1245,11 +1357,11 @@ fn test_variable_initialization() {
             vec![(
                 "abcd".to_string(),
                 vec![],
-                Some(ConstExpr::Literal(Literal::Integer(
+                Some(Initializer::Single(ConstExpr::Literal(Literal::Integer(
                     "42".to_string(),
                     IntegerRepr::Dec,
                     None
-                )))
+                ))))
             )],
         ))]
     );

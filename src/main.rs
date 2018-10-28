@@ -15,7 +15,8 @@ use crate::failable::FailableIterator;
 use crate::parser::Parser;
 
 fn main() -> Result<(), ParseError> {
-    let mut parser = Parser::from_code(include_str!("../y.pp.m"));
+    let mut parser = Parser::from_code(r#"x;"#);
+    // let mut parser = Parser::from_code(include_str!("../y.pp.m"));
     while let Some(decl) = parser.next()? {
         println!("Declaration: {:?}", decl);
     }

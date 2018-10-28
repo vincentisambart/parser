@@ -142,9 +142,51 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    NotEq,
+    Greater,
+    GreaterEq,
+    Less,
+    LessEq,
+    ShiftLeft,
+    ShiftRight,
+    BinaryOr,
+    BinaryAnd,
+    BinaryXor,
+    LogicOr,
+    LogicAnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Minus,
+    Plus,
+    Addr,
+    Deref,
+    BinNot,
+    LogicNot,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstExpr {
     Literal(Literal),
+    UnaryOp(BinaryOp, Box<ConstExpr>),
+    BinaryOp(BinaryOp, Box<ConstExpr>, Box<ConstExpr>),
+    TernaryOp(Box<ConstExpr>, Box<ConstExpr>, Box<ConstExpr>),
+    SizeOf(DerivedType),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Initializer {
+    Single(ConstExpr),
+    List(Vec<Initializer>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,7 +288,7 @@ pub struct TypeDecl(QualifiedType, Vec<(String, Vec<Deriv>)>);
 pub struct Decl(
     Option<Linkage>,
     QualifiedType,
-    Vec<(String, Vec<Deriv>, Option<ConstExpr>)>,
+    Vec<(String, Vec<Deriv>, Option<Initializer>)>,
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1302,7 +1344,8 @@ impl<'a> Parser<'a> {
                 }
 
                 let const_expr = if self.iter.advance_if_punc(Punctuator::Equal)? {
-                    Some(self.read_const_expr()?)
+                    // TODO: Could be an initializer list {1, 2, 3}
+                    Some(Initializer::Single(self.read_const_expr()?))
                 } else {
                     None
                 };
