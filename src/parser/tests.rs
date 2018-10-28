@@ -1,4 +1,5 @@
 use super::*;
+use crate::lex::IntegerRepr;
 
 fn parse_external_declarations(code: &str) -> Vec<ExtDecl> {
     let parser = Parser::from_code(code);
@@ -716,7 +717,9 @@ fn test_array_declaration() {
             ),
             vec![(
                 "foo".to_string(),
-                vec![Deriv::Array(ArraySize::Fixed(10))],
+                vec![Deriv::Array(ArraySize::Fixed(ConstExpr::Literal(
+                    Literal::Integer("10".to_string(), IntegerRepr::Dec, None)
+                )))],
                 None
             )]
         ))]
@@ -732,8 +735,16 @@ fn test_array_declaration() {
             vec![(
                 "foo".to_string(),
                 vec![
-                    Deriv::Array(ArraySize::Fixed(3)),
-                    Deriv::Array(ArraySize::Fixed(1))
+                    Deriv::Array(ArraySize::Fixed(ConstExpr::Literal(Literal::Integer(
+                        "3".to_string(),
+                        IntegerRepr::Dec,
+                        None
+                    )))),
+                    Deriv::Array(ArraySize::Fixed(ConstExpr::Literal(Literal::Integer(
+                        "1".to_string(),
+                        IntegerRepr::Dec,
+                        None
+                    ))))
                 ],
                 None
             )]
@@ -782,7 +793,11 @@ fn test_array_declaration() {
                     Deriv::Ptr(TypeQualifiers::empty()),
                     Deriv::Func(FuncDeclParams::Unspecified),
                     Deriv::Ptr(TypeQualifiers::empty()),
-                    Deriv::Array(ArraySize::Fixed(3))
+                    Deriv::Array(ArraySize::Fixed(ConstExpr::Literal(Literal::Integer(
+                        "3".to_string(),
+                        IntegerRepr::Dec,
+                        None
+                    ))))
                 ],
                 None
             )]
@@ -943,7 +958,14 @@ fn test_tag_definition() {
                     Some("foo".to_string()),
                     Some(vec![
                         EnumItem("a".to_string(), None),
-                        EnumItem("b".to_string(), Some(10)),
+                        EnumItem(
+                            "b".to_string(),
+                            Some(ConstExpr::Literal(Literal::Integer(
+                                "10".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ),
                         EnumItem("c".to_string(), None),
                     ])
                 )),
@@ -961,7 +983,14 @@ fn test_tag_definition() {
                     Some("foo".to_string()),
                     Some(vec![
                         EnumItem("a".to_string(), None),
-                        EnumItem("b".to_string(), Some(10)),
+                        EnumItem(
+                            "b".to_string(),
+                            Some(ConstExpr::Literal(Literal::Integer(
+                                "10".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ),
                         EnumItem("c".to_string(), None),
                     ])
                 )),
@@ -986,7 +1015,14 @@ fn test_tag_definition() {
                     None,
                     Some(vec![
                         EnumItem("a".to_string(), None),
-                        EnumItem("b".to_string(), Some(10)),
+                        EnumItem(
+                            "b".to_string(),
+                            Some(ConstExpr::Literal(Literal::Integer(
+                                "10".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ),
                         EnumItem("c".to_string(), None),
                     ])
                 )),
@@ -1012,7 +1048,14 @@ fn test_tag_definition() {
                     Some("foo".to_string()),
                     Some(vec![
                         EnumItem("a".to_string(), None),
-                        EnumItem("b".to_string(), Some(10)),
+                        EnumItem(
+                            "b".to_string(),
+                            Some(ConstExpr::Literal(Literal::Integer(
+                                "10".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ),
                         EnumItem("c".to_string(), None),
                     ])
                 )),
@@ -1049,7 +1092,14 @@ fn test_tag_definition() {
                     Some("foo".to_string()),
                     Some(vec![
                         EnumItem("a".to_string(), None),
-                        EnumItem("b".to_string(), Some(10)),
+                        EnumItem(
+                            "b".to_string(),
+                            Some(ConstExpr::Literal(Literal::Integer(
+                                "10".to_string(),
+                                IntegerRepr::Dec,
+                                None
+                            )))
+                        ),
                         EnumItem("c".to_string(), None),
                     ])
                 )),
@@ -1071,7 +1121,15 @@ fn test_tag_definition() {
                             TypeQualifiers::empty()
                         ),
                         vec![
-                            ("a".to_string(), vec![], Some(1)),
+                            (
+                                "a".to_string(),
+                                vec![],
+                                Some(ConstExpr::Literal(Literal::Integer(
+                                    "1".to_string(),
+                                    IntegerRepr::Dec,
+                                    None
+                                )))
+                            ),
                             ("b".to_string(), vec![], None),
                         ]
                     )])
@@ -1121,7 +1179,15 @@ fn test_tag_definition() {
                                 UnqualifiedType::Basic(BasicType::Int),
                                 TypeQualifiers::empty()
                             ),
-                            vec![("x".to_string(), vec![], Some(2)),]
+                            vec![(
+                                "x".to_string(),
+                                vec![],
+                                Some(ConstExpr::Literal(Literal::Integer(
+                                    "2".to_string(),
+                                    IntegerRepr::Dec,
+                                    None
+                                )))
+                            ),]
                         ),
                         TagItemDecl(
                             QualifiedType(
@@ -1176,7 +1242,15 @@ fn test_variable_initialization() {
                 UnqualifiedType::Basic(BasicType::Int),
                 TypeQualifiers::empty()
             ),
-            vec![("abcd".to_string(), vec![], Some(42))],
+            vec![(
+                "abcd".to_string(),
+                vec![],
+                Some(ConstExpr::Literal(Literal::Integer(
+                    "42".to_string(),
+                    IntegerRepr::Dec,
+                    None
+                )))
+            )],
         ))]
     );
 }

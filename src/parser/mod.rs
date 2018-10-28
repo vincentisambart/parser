@@ -1,6 +1,6 @@
 use crate::error::{ParseError, ParseErrorKind};
 use crate::failable::{FailableIterator, FailablePeekable};
-use crate::lex::{Keyword, Position, PositionedToken, Punctuator, Token, TokenIter};
+use crate::lex::{Keyword, Literal, Position, PositionedToken, Punctuator, Token, TokenIter};
 
 use bitflags::bitflags;
 use std::collections::HashSet;
@@ -142,7 +142,10 @@ bitflags! {
     }
 }
 
-type ConstExpr = u32;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstExpr {
+    Literal(Literal),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumItem(String, Option<ConstExpr>);
@@ -707,12 +710,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // TODO: The return value should be the AST of an expression
     fn read_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
         match self.iter.next()? {
-            Some(PositionedToken(Token::IntegerLiteral(literal, repr, _), _)) => {
-                Ok(u32::from_str_radix(literal.as_ref(), repr.radix()).unwrap())
-            }
+            Some(PositionedToken(Token::Literal(literal), _)) => Ok(ConstExpr::Literal(literal)),
             Some(PositionedToken(token, position)) => Err(ParseError::new_with_position(
                 ParseErrorKind::UnexpectedToken(token),
                 "currently only supporting integer literal constant values".to_string(),

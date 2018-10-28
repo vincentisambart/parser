@@ -317,11 +317,16 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Literal {
+    Integer(String, IntegerRepr, Option<IntegerSuffix>),
+    Float(String, FloatRepr, Option<FloatSuffix>),
+    Char(char, Option<CharPrefix>),
+    Str(String, Option<StringPrefix>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    IntegerLiteral(String, IntegerRepr, Option<IntegerSuffix>),
-    FloatLiteral(String, FloatRepr, Option<FloatSuffix>),
-    CharLiteral(char, Option<CharPrefix>),
-    StringLiteral(String, Option<StringPrefix>),
+    Literal(Literal),
     Identifier(String),
     Keyword(Keyword),
     ObjCKeyword(ObjCKeyword),
@@ -379,21 +384,29 @@ impl<'a> BasicTokenIter<'a> {
                 }
                 if is_float {
                     let suffix = self.read_float_suffix();
-                    return Ok(Token::FloatLiteral(token, FloatRepr::Hex, suffix));
+                    return Ok(Token::Literal(Literal::Float(
+                        token,
+                        FloatRepr::Hex,
+                        suffix,
+                    )));
                 } else {
                     let suffix = self.read_integer_suffix();
-                    return Ok(Token::IntegerLiteral(token, IntegerRepr::Hex, suffix));
+                    return Ok(Token::Literal(Literal::Integer(
+                        token,
+                        IntegerRepr::Hex,
+                        suffix,
+                    )));
                 }
             } else if let Some(digit) = self.scanner.next_if(CharPattern::is_ascii_octdigit) {
                 // octal
                 token.push(digit);
                 self.scanner
                     .push_while(&mut token, CharPattern::is_ascii_octdigit);
-                return Ok(Token::IntegerLiteral(
+                return Ok(Token::Literal(Literal::Integer(
                     token,
                     IntegerRepr::Oct,
                     self.read_integer_suffix(),
-                ));
+                )));
             }
 
             token.push('0');
@@ -423,10 +436,18 @@ impl<'a> BasicTokenIter<'a> {
         }
         if is_float {
             let suffix = self.read_float_suffix();
-            Ok(Token::FloatLiteral(token, FloatRepr::Dec, suffix))
+            Ok(Token::Literal(Literal::Float(
+                token,
+                FloatRepr::Dec,
+                suffix,
+            )))
         } else {
             let suffix = self.read_integer_suffix();
-            Ok(Token::IntegerLiteral(token, IntegerRepr::Dec, suffix))
+            Ok(Token::Literal(Literal::Integer(
+                token,
+                IntegerRepr::Dec,
+                suffix,
+            )))
         }
     }
 
@@ -521,9 +542,9 @@ impl<'a> BasicTokenIter<'a> {
         let t = match self.scanner.next() {
             Some('\\') => {
                 let c = self.read_char_escape()?;
-                Token::CharLiteral(c, prefix)
+                Token::Literal(Literal::Char(c, prefix))
             }
-            Some(c) => Token::CharLiteral(c, prefix),
+            Some(c) => Token::Literal(Literal::Char(c, prefix)),
             None => {
                 return Err(ParseError::new(
                     ParseErrorKind::UnexpectedEOF,
@@ -566,7 +587,7 @@ impl<'a> BasicTokenIter<'a> {
 
         loop {
             match self.scanner.next() {
-                Some('"') => break Ok(Token::StringLiteral(string, prefix)),
+                Some('"') => break Ok(Token::Literal(Literal::Str(string, prefix))),
                 Some('\\') => {
                     let c = self.read_char_escape()?;
                     string.push(c);
@@ -597,7 +618,7 @@ impl<'a> BasicTokenIter<'a> {
                     ))
                 }
             },
-            Some(Token::IntegerLiteral(literal, repr, _)) => {
+            Some(Token::Literal(Literal::Integer(literal, repr, _))) => {
                 let line = if let Ok(number) = u32::from_str_radix(literal.as_ref(), repr.radix()) {
                     number
                 } else {
@@ -609,7 +630,7 @@ impl<'a> BasicTokenIter<'a> {
                 };
 
                 let file_path;
-                if let Some(Token::StringLiteral(text, None)) = iter.next() {
+                if let Some(Token::Literal(Literal::Str(text, None))) = iter.next() {
                     file_path = text;
                 } else {
                     return Err(ParseError::new_with_position(
@@ -623,7 +644,7 @@ impl<'a> BasicTokenIter<'a> {
 
                 for token in iter {
                     match token {
-                        Token::IntegerLiteral(_, _, _) => (),
+                        Token::Literal(Literal::Integer(_, _, _)) => (),
                         _ => {
                             return Err(ParseError::new_with_position(
                                 ParseErrorKind::InvalidPreprocDirective,
@@ -983,36 +1004,43 @@ impl<'a> FailableIterator for TokenIter<'a> {
     fn next(&mut self) -> Result<Option<PositionedToken>, ParseError> {
         Ok(match self.iter.next()? {
             // merge adjacent string literals
-            Some(PositionedToken(Token::StringLiteral(mut literal, mut prefix), pos)) => loop {
-                match self.iter.peek()? {
-                    Some(PositionedToken(Token::StringLiteral(_, _), _)) => {
-                        if let Some(PositionedToken(
-                            Token::StringLiteral(following_literal, following_prefix),
-                            following_position,
-                        )) = self.iter.next()?
-                        {
-                            if prefix != following_prefix {
-                                if prefix.is_some() {
-                                    if following_prefix.is_some() {
-                                        return Err(ParseError::new_with_position(
-                                            ParseErrorKind::InvalidConstruct,
-                                            "adjacent string literals must use the same prefix"
-                                                .to_string(),
-                                            following_position,
-                                        ));
+            Some(PositionedToken(Token::Literal(Literal::Str(mut literal, mut prefix)), pos)) => {
+                loop {
+                    match self.iter.peek()? {
+                        Some(PositionedToken(Token::Literal(Literal::Str(_, _)), _)) => {
+                            if let Some(PositionedToken(
+                                Token::Literal(Literal::Str(following_literal, following_prefix)),
+                                following_position,
+                            )) = self.iter.next()?
+                            {
+                                if prefix != following_prefix {
+                                    if prefix.is_some() {
+                                        if following_prefix.is_some() {
+                                            return Err(ParseError::new_with_position(
+                                                ParseErrorKind::InvalidConstruct,
+                                                "adjacent string literals must use the same prefix"
+                                                    .to_string(),
+                                                following_position,
+                                            ));
+                                        }
+                                    } else {
+                                        prefix = following_prefix;
                                     }
-                                } else {
-                                    prefix = following_prefix;
                                 }
+                                literal.push_str(following_literal.as_ref());
+                            } else {
+                                unreachable!();
                             }
-                            literal.push_str(following_literal.as_ref());
-                        } else {
-                            unreachable!();
+                        }
+                        _ => {
+                            break Some(PositionedToken(
+                                Token::Literal(Literal::Str(literal, prefix)),
+                                pos,
+                            ))
                         }
                     }
-                    _ => break Some(PositionedToken(Token::StringLiteral(literal, prefix), pos)),
                 }
-            },
+            }
             next => next,
         })
     }
@@ -1050,33 +1078,42 @@ mod tests {
     fn test_string_literal() {
         assert_eq!(
             parse_one_valid_token(r#""abcd\"""#),
-            Token::StringLiteral("abcd\"".to_string(), None),
+            Token::Literal(Literal::Str("abcd\"".to_string(), None)),
         );
         assert_eq!(
             parse_one_valid_token(r#""a\tbc\nd""#),
-            Token::StringLiteral("a\tbc\nd".to_string(), None),
+            Token::Literal(Literal::Str("a\tbc\nd".to_string(), None)),
         );
         assert_eq!(
             parse_one_valid_token(r#""\x61\0\0123""#),
-            Token::StringLiteral("a\0\n3".to_string(), None),
+            Token::Literal(Literal::Str("a\0\n3".to_string(), None)),
         );
         assert_eq!(
             parse_one_valid_token(r#""abcd" "efgh" "ijkl""#),
-            Token::StringLiteral("abcdefghijkl".to_string(), None),
+            Token::Literal(Literal::Str("abcdefghijkl".to_string(), None)),
         );
         // adjacent string literal must all have the same prefix
         // (if there's no prefix it becomes the prefix or the adjacent string)
         assert_eq!(
             parse_one_valid_token(r#"u"abcd" u"efgh""#),
-            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::Char16)),
+            Token::Literal(Literal::Str(
+                "abcdefgh".to_string(),
+                Some(StringPrefix::Char16)
+            )),
         );
         assert_eq!(
             parse_one_valid_token(r#""abcd" U"efgh""#),
-            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::Char32)),
+            Token::Literal(Literal::Str(
+                "abcdefgh".to_string(),
+                Some(StringPrefix::Char32)
+            )),
         );
         assert_eq!(
             parse_one_valid_token(r#"L"abcd" "efgh""#),
-            Token::StringLiteral("abcdefgh".to_string(), Some(StringPrefix::WChar)),
+            Token::Literal(Literal::Str(
+                "abcdefgh".to_string(),
+                Some(StringPrefix::WChar)
+            )),
         );
     }
 
@@ -1084,31 +1121,31 @@ mod tests {
     fn test_number_literal() {
         assert_eq!(
             parse_one_valid_token("123"),
-            Token::IntegerLiteral("123".to_string(), IntegerRepr::Dec, None),
+            Token::Literal(Literal::Integer("123".to_string(), IntegerRepr::Dec, None)),
         );
         assert_eq!(
             parse_one_valid_token("0x123"),
-            Token::IntegerLiteral("123".to_string(), IntegerRepr::Hex, None),
+            Token::Literal(Literal::Integer("123".to_string(), IntegerRepr::Hex, None)),
         );
         assert_eq!(
             parse_one_valid_token("0.123"),
-            Token::FloatLiteral("0.123".to_string(), FloatRepr::Dec, None),
+            Token::Literal(Literal::Float("0.123".to_string(), FloatRepr::Dec, None)),
         );
         assert_eq!(
             parse_one_valid_token("0.123f"),
-            Token::FloatLiteral(
+            Token::Literal(Literal::Float(
                 "0.123".to_string(),
                 FloatRepr::Dec,
                 Some(FloatSuffix::Float),
-            ),
+            )),
         );
         assert_eq!(
             parse_one_valid_token("0x0.123p12L"),
-            Token::FloatLiteral(
+            Token::Literal(Literal::Float(
                 "0.123p12".to_string(),
                 FloatRepr::Hex,
                 Some(FloatSuffix::LongDouble),
-            ),
+            )),
         );
     }
 
