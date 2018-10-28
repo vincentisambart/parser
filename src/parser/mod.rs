@@ -187,8 +187,8 @@ pub enum ConstExpr {
     // Some of the expressions below are by themselves not constant,
     // but can be given to sizeof in a constant expression.
     Subscript(Box<ConstExpr>, Box<ConstExpr>),
-    Member(Box<ConstExpr>, Box<ConstExpr>),
-    PtrMember(Box<ConstExpr>, Box<ConstExpr>),
+    Member(Box<ConstExpr>, String),
+    PtrMember(Box<ConstExpr>, String),
     FuncCall(Box<ConstExpr>, Vec<ConstExpr>),
 }
 
@@ -650,6 +650,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn read_ident(&mut self) -> Result<String, ParseError> {
+        match self.iter.next()? {
+            Some(PositionedToken(Token::Identifier(ident), _)) => Ok(ident),
+            Some(PositionedToken(token, pos)) => {
+                let message = format!("expecting identifier, got {:?}", token);
+                Err(ParseError::new_with_position(
+                    ParseErrorKind::UnexpectedToken(token),
+                    message,
+                    pos,
+                ))
+            }
+            None => Err(ParseError::new(
+                ParseErrorKind::UnexpectedEOF,
+                "unfinished construct at end of line, expecting identifier".to_string(),
+            )),
+        }
+    }
+
     fn next_token_pos(&mut self) -> Result<Option<Position>, ParseError> {
         match self.iter.peek()? {
             Some(PositionedToken(_, pos)) => Ok(Some(pos.clone())),
@@ -783,16 +801,31 @@ impl<'a> Parser<'a> {
     }
 
     fn read_postfix_expr(&mut self) -> Result<ConstExpr, ParseError> {
-        let expr = self.read_primary_expr()?;
+        let mut expr = self.read_primary_expr()?;
         loop {
             if self.iter.advance_if_punc(Punctuator::LeftSquareBracket)? {
-                unimplemented!()
+                let index_expr = self.read_const_expr()?;
+                self.expect_token(&Token::Punctuator(Punctuator::RightSquareBracket))?;
+                expr = ConstExpr::Subscript(Box::new(expr), Box::new(index_expr));
             } else if self.iter.advance_if_punc(Punctuator::LeftParenthesis)? {
-                unimplemented!()
+                let mut params = Vec::new();
+                if !self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+                    loop {
+                        let param = self.read_const_expr()?;
+                        params.push(param);
+                        if self.iter.advance_if_punc(Punctuator::RightParenthesis)? {
+                            break;
+                        }
+                        self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
+                    }
+                }
+                expr = ConstExpr::FuncCall(Box::new(expr), params);
             } else if self.iter.advance_if_punc(Punctuator::Period)? {
-                unimplemented!()
+                let ident = self.read_ident()?;
+                expr = ConstExpr::Member(Box::new(expr), ident);
             } else if self.iter.advance_if_punc(Punctuator::Arrow)? {
-                unimplemented!()
+                let ident = self.read_ident()?;
+                expr = ConstExpr::PtrMember(Box::new(expr), ident);
             } else {
                 break Ok(expr);
             }
@@ -1595,6 +1628,28 @@ impl<'a> Parser<'a> {
         Ok(ExtDecl::TypeDef(TypeDecl(qual_type, declarators)))
     }
 
+    fn read_initializer(&mut self) -> Result<Initializer, ParseError> {
+        if self.iter.advance_if_punc(Punctuator::LeftCurlyBracket)? {
+            // initializer list
+            let mut initializers = Vec::new();
+            loop {
+                if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                    break;
+                }
+                let initializer = self.read_initializer()?;
+                initializers.push(initializer);
+                if self.iter.advance_if_punc(Punctuator::RightCurlyBracket)? {
+                    break;
+                } else {
+                    self.expect_token(&Token::Punctuator(Punctuator::Comma))?;
+                }
+            }
+            Ok(Initializer::List(initializers))
+        } else {
+            Ok(Initializer::Single(self.read_const_expr()?))
+        }
+    }
+
     fn read_decl_or_def(&mut self, decl_spec: Option<DeclSpec>) -> Result<ExtDecl, ParseError> {
         let mut declarators = Vec::new();
         if !self.iter.advance_if_punc(Punctuator::Semicolon)? {
@@ -1635,8 +1690,7 @@ impl<'a> Parser<'a> {
                 }
 
                 let const_expr = if self.iter.advance_if_punc(Punctuator::Equal)? {
-                    // TODO: Could be an initializer list {1, 2, 3}
-                    Some(Initializer::Single(self.read_const_expr()?))
+                    Some(self.read_initializer()?)
                 } else {
                     None
                 };
