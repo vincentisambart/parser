@@ -252,6 +252,7 @@ lazy_static! {
         keywords.insert("goto", Keyword::Goto);
         keywords.insert("if", Keyword::If);
         keywords.insert("inline", Keyword::Inline);
+        keywords.insert("__inline", Keyword::Inline);
         keywords.insert("int", Keyword::Int);
         keywords.insert("long", Keyword::Long);
         keywords.insert("register", Keyword::Register);
