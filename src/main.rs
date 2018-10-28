@@ -1,7 +1,6 @@
 // TODO:
 // - For testing pragmas, have a look at clang's test/Sema/pragma-align-packed.c
 // - Add position to declarations
-// - Variable initialization
 // - Error on _Thread_local in typedefs and other forbidden places
 
 mod error;
