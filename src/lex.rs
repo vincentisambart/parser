@@ -151,266 +151,115 @@ pub struct Position {
     line: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Keyword {
-    Auto,
-    Break,
-    Case,
-    Char,
-    Const,
-    Continue,
-    Default,
-    Do,
-    Double,
-    Else,
-    Enum,
-    Extern,
-    Float,
-    For,
-    Goto,
-    If,
-    Inline,
-    InlineAlt,
-    Int,
-    Long,
-    Register,
-    Restrict,
-    Return,
-    Short,
-    Signed,
-    Sizeof,
-    Static,
-    Struct,
-    Switch,
-    Typedef,
-    Union,
-    Unsigned,
-    Void,
-    Volatile,
-    While,
-    Alignas,
-    Alignof,
-    Atomic,
-    Bool,
-    Complex,
-    Generic,
-    Imaginary,
-    Noreturn,
-    StaticAssert,
-    ThreadLocal,
+macro_rules! kw_enum {
+    ( $name:ident { $( $kw:ident => $repr:expr, )* } ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $name {
+            $($kw),*
+        }
+
+        impl $name {
+            // pub fn to_str(&self) -> &'static str {
+            //     match self {
+            //         $($name::$kw => $repr,)*
+            //     }
+            // }
+
+            fn map() -> HashMap<&'static str, $name> {
+                let mut keywords = HashMap::new();
+                $(keywords.insert($repr, $name::$kw);)*
+                keywords
+            }
+        }
+    }
 }
 
-impl Keyword {
-    fn to_str(&self) -> &'static str {
-        match self {
-            Keyword::Auto => "auto",
-            Keyword::Break => "break",
-            Keyword::Case => "case",
-            Keyword::Char => "char",
-            Keyword::Const => "const",
-            Keyword::Continue => "continue",
-            Keyword::Default => "default",
-            Keyword::Do => "do",
-            Keyword::Double => "double",
-            Keyword::Else => "else",
-            Keyword::Enum => "enum",
-            Keyword::Extern => "extern",
-            Keyword::Float => "float",
-            Keyword::For => "for",
-            Keyword::Goto => "goto",
-            Keyword::If => "if",
-            Keyword::Inline => "inline",
-            Keyword::InlineAlt => "__inline",
-            Keyword::Int => "int",
-            Keyword::Long => "long",
-            Keyword::Register => "register",
-            Keyword::Restrict => "restrict",
-            Keyword::Return => "return",
-            Keyword::Short => "short",
-            Keyword::Signed => "signed",
-            Keyword::Sizeof => "sizeof",
-            Keyword::Static => "static",
-            Keyword::Struct => "struct",
-            Keyword::Switch => "switch",
-            Keyword::Typedef => "typedef",
-            Keyword::Union => "union",
-            Keyword::Unsigned => "unsigned",
-            Keyword::Void => "void",
-            Keyword::Volatile => "volatile",
-            Keyword::While => "while",
-            Keyword::Alignas => "_Alignas",
-            Keyword::Alignof => "_Alignof",
-            Keyword::Atomic => "_Atomic",
-            Keyword::Bool => "_Bool",
-            Keyword::Complex => "_Complex",
-            Keyword::Generic => "_Generic",
-            Keyword::Imaginary => "_Imaginary",
-            Keyword::Noreturn => "_Noreturn",
-            Keyword::StaticAssert => "_Static_assert",
-            Keyword::ThreadLocal => "_Thread_local",
-        }
+kw_enum! {
+    Keyword {
+        Auto => "auto",
+        Break => "break",
+        Case => "case",
+        Char => "char",
+        Const => "const",
+        Continue => "continue",
+        Default => "default",
+        Do => "do",
+        Double => "double",
+        Else => "else",
+        Enum => "enum",
+        Extern => "extern",
+        Float => "float",
+        For => "for",
+        Goto => "goto",
+        If => "if",
+        Inline => "inline",
+        InlineAlt => "__inline",
+        Int => "int",
+        Long => "long",
+        Register => "register",
+        Restrict => "restrict",
+        Return => "return",
+        Short => "short",
+        Signed => "signed",
+        Sizeof => "sizeof",
+        Static => "static",
+        Struct => "struct",
+        Switch => "switch",
+        Typedef => "typedef",
+        Union => "union",
+        Unsigned => "unsigned",
+        Void => "void",
+        Volatile => "volatile",
+        While => "while",
+        Alignas => "_Alignas",
+        Alignof => "_Alignof",
+        Atomic => "_Atomic",
+        Bool => "_Bool",
+        Complex => "_Complex",
+        Generic => "_Generic",
+        Imaginary => "_Imaginary",
+        Noreturn => "_Noreturn",
+        StaticAssert => "_Static_assert",
+        ThreadLocal => "_Thread_local",
     }
 }
 
 // Objective-C keywords, always after a @.
 // The list comes from clang's include/clang/Basic/TokenKinds.def.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjCKeyword {
-    Class,
-    CompatibilityAlias,
-    Defs,
-    Encode,
-    End,
-    Implementation,
-    Interface,
-    Private,
-    Protected,
-    Protocol,
-    Public,
-    Selector,
-    Throw,
-    Try,
-    Catch,
-    Finally,
-    Synchronized,
-    Autoreleasepool,
-    Property,
-    Package,
-    Required,
-    Optional,
-    Synthesize,
-    Dynamic,
-    Import,
-    Available,
-}
-
-impl ObjCKeyword {
-    fn to_str(&self) -> &'static str {
-        match self {
-            ObjCKeyword::Class => "class",
-            ObjCKeyword::CompatibilityAlias => "compatibility_alias",
-            ObjCKeyword::Defs => "defs",
-            ObjCKeyword::Encode => "encode",
-            ObjCKeyword::End => "end",
-            ObjCKeyword::Implementation => "implementation",
-            ObjCKeyword::Interface => "interface",
-            ObjCKeyword::Private => "private",
-            ObjCKeyword::Protected => "protected",
-            ObjCKeyword::Protocol => "protocol",
-            ObjCKeyword::Public => "public",
-            ObjCKeyword::Selector => "selector",
-            ObjCKeyword::Throw => "throw",
-            ObjCKeyword::Try => "try",
-            ObjCKeyword::Catch => "catch",
-            ObjCKeyword::Finally => "finally",
-            ObjCKeyword::Synchronized => "synchronized",
-            ObjCKeyword::Autoreleasepool => "autoreleasepool",
-            ObjCKeyword::Property => "property",
-            ObjCKeyword::Package => "package",
-            ObjCKeyword::Required => "required",
-            ObjCKeyword::Optional => "optional",
-            ObjCKeyword::Synthesize => "synthesize",
-            ObjCKeyword::Dynamic => "dynamic",
-            ObjCKeyword::Import => "import",
-            ObjCKeyword::Available => "available",
-        }
+kw_enum! {
+    ObjCKeyword {
+        Class => "class",
+        CompatibilityAlias => "compatibility_alias",
+        Defs => "defs",
+        Encode => "encode",
+        End => "end",
+        Implementation => "implementation",
+        Interface => "interface",
+        Private => "private",
+        Protected => "protected",
+        Protocol => "protocol",
+        Public => "public",
+        Selector => "selector",
+        Throw => "throw",
+        Try => "try",
+        Catch => "catch",
+        Finally => "finally",
+        Synchronized => "synchronized",
+        Autoreleasepool => "autoreleasepool",
+        Property => "property",
+        Package => "package",
+        Required => "required",
+        Optional => "optional",
+        Synthesize => "synthesize",
+        Dynamic => "dynamic",
+        Import => "import",
+        Available => "available",
     }
 }
 
 lazy_static! {
-    static ref KEYWORDS: HashMap<&'static str, Keyword> = {
-        let all_keywords = [
-            Keyword::Auto,
-            Keyword::Break,
-            Keyword::Case,
-            Keyword::Char,
-            Keyword::Const,
-            Keyword::Continue,
-            Keyword::Default,
-            Keyword::Do,
-            Keyword::Double,
-            Keyword::Else,
-            Keyword::Enum,
-            Keyword::Extern,
-            Keyword::Float,
-            Keyword::For,
-            Keyword::Goto,
-            Keyword::If,
-            Keyword::Inline,
-            Keyword::InlineAlt,
-            Keyword::Int,
-            Keyword::Long,
-            Keyword::Register,
-            Keyword::Restrict,
-            Keyword::Return,
-            Keyword::Short,
-            Keyword::Signed,
-            Keyword::Sizeof,
-            Keyword::Static,
-            Keyword::Struct,
-            Keyword::Switch,
-            Keyword::Typedef,
-            Keyword::Union,
-            Keyword::Unsigned,
-            Keyword::Void,
-            Keyword::Volatile,
-            Keyword::While,
-            Keyword::Alignas,
-            Keyword::Alignof,
-            Keyword::Atomic,
-            Keyword::Bool,
-            Keyword::Complex,
-            Keyword::Generic,
-            Keyword::Imaginary,
-            Keyword::Noreturn,
-            Keyword::StaticAssert,
-            Keyword::ThreadLocal,
-        ];
-
-        let mut keywords = HashMap::new();
-        for keyword in all_keywords.iter() {
-            keywords.insert(keyword.to_str(), *keyword);
-        }
-
-        keywords
-    };
-    static ref OBJC_KEYWORDS: HashMap<&'static str, ObjCKeyword> = {
-        let all_keywords = [
-            ObjCKeyword::Class,
-            ObjCKeyword::CompatibilityAlias,
-            ObjCKeyword::Defs,
-            ObjCKeyword::Encode,
-            ObjCKeyword::End,
-            ObjCKeyword::Implementation,
-            ObjCKeyword::Interface,
-            ObjCKeyword::Private,
-            ObjCKeyword::Protected,
-            ObjCKeyword::Protocol,
-            ObjCKeyword::Public,
-            ObjCKeyword::Selector,
-            ObjCKeyword::Throw,
-            ObjCKeyword::Try,
-            ObjCKeyword::Catch,
-            ObjCKeyword::Finally,
-            ObjCKeyword::Synchronized,
-            ObjCKeyword::Autoreleasepool,
-            ObjCKeyword::Property,
-            ObjCKeyword::Package,
-            ObjCKeyword::Required,
-            ObjCKeyword::Optional,
-            ObjCKeyword::Synthesize,
-            ObjCKeyword::Dynamic,
-            ObjCKeyword::Import,
-            ObjCKeyword::Available,
-        ];
-
-        let mut keywords = HashMap::new();
-        for keyword in all_keywords.iter() {
-            keywords.insert(keyword.to_str(), *keyword);
-        }
-
-        keywords
-    };
+    static ref KEYWORDS: HashMap<&'static str, Keyword> = Keyword::map();
+    static ref OBJC_KEYWORDS: HashMap<&'static str, ObjCKeyword> = ObjCKeyword::map();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
