@@ -1282,7 +1282,9 @@ impl<'a> Parser<'a> {
                             linkage = Some(Linkage::Internal);
                         }
                         Keyword::Noreturn => func_specifiers |= FuncSpecifiers::NORETURN,
-                        Keyword::Inline => func_specifiers |= FuncSpecifiers::INLINE,
+                        Keyword::Inline | Keyword::InlineAlt => {
+                            func_specifiers |= FuncSpecifiers::INLINE
+                        }
                         Keyword::ThreadLocal => is_thread_local = true,
                         kw => {
                             return Err(ParseError::new_with_position(
